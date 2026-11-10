@@ -178,8 +178,7 @@ local function OnSetBagItem(tt, bag, slot)
     if not locked or not btn or btn == UIParent or btn == WorldFrame then return end
 
     local spell = SpellName(SPELL.LOCKPICK)
-    overlay:SetAttribute("macrotext2", "/cast " .. spell .. "
-/use " .. bag .. " " .. slot)
+    overlay:SetAttribute("macrotext2", "/cast " .. spell .. "\n/use " .. bag .. " " .. slot)
     overlay.target = btn
     overlay:SetParent(btn)       -- se cache avec le sac
     overlay:ClearAllPoints()
