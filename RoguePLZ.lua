@@ -16,7 +16,20 @@ local SPELL = {
     PICK     = 921,   -- Vol à la tire
     STEALTH  = 1784,  -- Camouflage
     LOCKPICK = 1804,  -- Crochetage
+    BOW      = 2480,  -- Tir à l'arc
+    GUN      = 7918,  -- Tir au fusil
+    CROSSBOW = 7919,  -- Tir à l'arbalète
+    THROW    = 2764,  -- Lancer
 }
+
+-- Sous-classes d'armes (classe 2) : leur nom localisé sert dans [equipped:…].
+local WEAPON = { BOW = 2, GUN = 3, THROWN = 16, CROSSBOW = 18 }
+local WEAPON_EN = { BOW = "Bows", GUN = "Guns", THROWN = "Thrown", CROSSBOW = "Crossbows" }
+
+local function WeaponType(key)
+    local f = (C_Item and C_Item.GetItemSubClassInfo) or GetItemSubClassInfo
+    return (f and f(2, WEAPON[key])) or WEAPON_EN[key]
+end
 
 local function SpellName(id)
     if C_Spell and C_Spell.GetSpellName then return C_Spell.GetSpellName(id) end
@@ -71,6 +84,13 @@ local function BuildMacros()
             .. "/targetenemy [noexists]\n"
             .. "/cast [@mouseover,harm,exists,nodead] " .. n.PICK .. "; " .. n.PICK .. "\n"
             .. "/cast [nostealth] " .. n.STEALTH },
+        -- Tir à distance : choisit le bon sort selon l'arme équipée.
+        { name = GetLocale() == "frFR" and "Tir à distance" or "Ranged",
+          icon = "Ability_Marksmanship",
+          body = "/cast [equipped:" .. WeaponType("BOW") .. "] " .. n.BOW
+            .. "; [equipped:" .. WeaponType("GUN") .. "] " .. n.GUN
+            .. "; [equipped:" .. WeaponType("CROSSBOW") .. "] " .. n.CROSSBOW
+            .. "; [equipped:" .. WeaponType("THROWN") .. "] " .. n.THROW },
     }
 end
 
@@ -93,11 +113,11 @@ local function SetupMacros(overwrite)
                 full = true
             else
                 -- Icône « ? » : #showtooltip affiche alors l'icône du sort.
-                CreateMacro(name, "INV_MISC_QUESTIONMARK", m.body, true)
+                CreateMacro(name, m.icon or "INV_MISC_QUESTIONMARK", m.body, true)
                 created = created + 1
             end
         elseif overwrite then
-            EditMacro(index, name, "INV_MISC_QUESTIONMARK", m.body)
+            EditMacro(index, name, m.icon or "INV_MISC_QUESTIONMARK", m.body)
             updated = updated + 1
         end
     end
