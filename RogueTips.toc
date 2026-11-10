@@ -2,6 +2,7 @@
 ## Title: RogueTips
 ## Notes: Rogue helpers: stealth opener macros and right-click Pick Lock on bag lockboxes.
 ## Notes-frFR: Aides voleur : macros d'ouverture en camouflage et Crochetage au clic droit sur les coffres du sac.
+## IconTexture: Interface\Icons\Ability_Stealth
 ## Author: Kirbye
 ## Version: @project-version@
 
