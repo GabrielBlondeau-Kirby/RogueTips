@@ -1,4 +1,4 @@
--- RoguePLZ : aides perso pour voleur.
+-- RogueTips : aides perso pour voleur.
 --  1. Crée les macros d'ouverture (noms de sorts dans la langue du client).
 --  2. Clic droit sur un coffre verrouillé du sac = Crochetage dessus.
 
@@ -37,7 +37,7 @@ local function SpellName(id)
 end
 
 local function Print(msg)
-    print("|cff33ff99RoguePLZ|r : " .. msg)
+    print("|cff33ff99RogueTips|r : " .. msg)
 end
 
 ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ local function BuildMacros()
     }
 end
 
--- overwrite = true : réécrit aussi les macros existantes (commande /rogueplz macros).
+-- overwrite = true : réécrit aussi les macros existantes (commande /roguetips macros).
 local function SetupMacros(overwrite)
     if InCombatLockdown() then
         Print("en combat, macros créées à la sortie du combat.")
@@ -150,7 +150,7 @@ local function TooltipSaysLocked(tt)
     return false
 end
 
-local overlay = CreateFrame("Button", "RoguePLZLockpickButton", UIParent, "SecureActionButtonTemplate")
+local overlay = CreateFrame("Button", "RogueTipsLockpickButton", UIParent, "SecureActionButtonTemplate")
 overlay:Hide()
 overlay:RegisterForClicks("RightButtonUp")
 overlay:SetAttribute("useOnKeyDown", false)  -- clients récents : agir au relâchement
@@ -230,8 +230,8 @@ ev:SetScript("OnEvent", function(_, event)
     end
 end)
 
-SLASH_ROGUEPLZ1 = "/rogueplz"
-SlashCmdList.ROGUEPLZ = function(msg)
+SLASH_ROGUETIPS1 = "/roguetips"
+SlashCmdList.ROGUETIPS = function(msg)
     msg = (msg or ""):lower()
     if msg == "macros" then
         SetupMacros(true)
@@ -239,7 +239,7 @@ SlashCmdList.ROGUEPLZ = function(msg)
         debug = not debug
         Print("debug " .. (debug and "activé" or "désactivé") .. ".")
     else
-        Print("/rogueplz macros : recrée et remet à jour les macros.")
-        Print("/rogueplz debug : affiche ce que l'addon voit au survol des objets.")
+        Print("/roguetips macros : recrée et remet à jour les macros.")
+        Print("/roguetips debug : affiche ce que l'addon voit au survol des objets.")
     end
 end
