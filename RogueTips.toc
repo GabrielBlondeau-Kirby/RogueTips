@@ -5,5 +5,6 @@
 ## IconTexture: Interface\Icons\Ability_Stealth
 ## Author: Kirbye
 ## Version: @project-version@
+## SavedVariables: RogueTipsDB
 
 RogueTips.lua
