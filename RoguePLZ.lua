@@ -115,23 +115,17 @@ end
 -- sécurisé par-dessus la case du coffre survolé. Son clic droit exécute
 -- « /cast Crochetage » + « /use sac case ». Le clic gauche traverse.
 
-local scanTip = CreateFrame("GameTooltip", "RoguePLZScanTip", nil, "GameTooltipTemplate")
-scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+local debug = false
+local function Debug(msg) if debug then Print("|cffaaaaaa" .. msg .. "|r") end end
 
-local function IsLockedBox(bag, slot)
+-- Le coffre est verrouillé si l'info-bulle affichée contient la ligne LOCKED.
+local function TooltipSaysLocked(tt)
     local lockedText = LOCKED or "Locked"
-    if C_TooltipInfo and C_TooltipInfo.GetBagItem then
-        local data = C_TooltipInfo.GetBagItem(bag, slot)
-        for _, line in ipairs(data and data.lines or {}) do
-            if line.leftText == lockedText then return true end
-        end
-        return false
-    end
-    scanTip:ClearLines()
-    scanTip:SetBagItem(bag, slot)
-    for i = 2, scanTip:NumLines() do
-        local fs = _G["RoguePLZScanTipTextLeft" .. i]
-        if fs and fs:GetText() == lockedText then return true end
+    local name = tt:GetName()
+    for i = 2, tt:NumLines() do
+        local fs = _G[name .. "TextLeft" .. i]
+        local text = fs and fs:GetText()
+        if text and strtrim(text) == lockedText then return true end
     end
     return false
 end
@@ -167,41 +161,34 @@ overlay:SetScript("OnLeave", function()
     HideOverlay()
 end)
 -- Après le crochetage le coffre n'est plus verrouillé : on retire le bouton.
-overlay:SetScript("PostClick", function() C_Timer.After(0.2, HideOverlay) end)
+overlay:SetScript("PostClick", function(_, button)
+    Debug("clic " .. tostring(button) .. " sur le bouton Crochetage")
+    C_Timer.After(0.2, HideOverlay)
+end)
 
-local function ButtonBagSlot(btn)
-    local bag = btn.GetBagID and btn:GetBagID() or (btn:GetParent() and btn:GetParent():GetID())
-    local slot = btn.GetID and btn:GetID()
-    return bag, slot
-end
-
-local function OnItemEnter(btn)
+-- On s'accroche à GameTooltip:SetBagItem plutôt qu'aux boutons du sac :
+-- ça marche quel que soit le nom des cases (sacs séparés, sac combiné…),
+-- et on lit directement l'info-bulle que le jeu vient de remplir.
+local function OnSetBagItem(tt, bag, slot)
     if overlay.reentering or InCombatLockdown() then return end
-    if not IsSpellKnown(SPELL.LOCKPICK) then return end
-    local bag, slot = ButtonBagSlot(btn)
-    if not bag or not slot or not IsLockedBox(bag, slot) then return end
+    local btn = tt:GetOwner()
+    local locked = TooltipSaysLocked(tt)
+    Debug(("survol sac %s case %s, bouton %s, verrouillé : %s"):format(
+        tostring(bag), tostring(slot), btn and (btn:GetName() or "sans nom") or "aucun", tostring(locked)))
+    if not locked or not btn or btn == UIParent or btn == WorldFrame then return end
 
-    overlay:SetAttribute("macrotext2",
-        "/cast " .. SpellName(SPELL.LOCKPICK) .. "\n/use " .. bag .. " " .. slot)
+    local spell = SpellName(SPELL.LOCKPICK)
+    overlay:SetAttribute("macrotext2", "/cast " .. spell .. "
+/use " .. bag .. " " .. slot)
     overlay.target = btn
     overlay:SetParent(btn)       -- se cache avec le sac
+    overlay:ClearAllPoints()
     overlay:SetAllPoints(btn)
     overlay:SetFrameLevel(btn:GetFrameLevel() + 5)
     overlay:Show()
+    Debug("bouton Crochetage posé : /cast " .. spell .. " + /use " .. bag .. " " .. slot)
 end
-
-local hooked = {}
-local function HookBagButtons()
-    for f = 1, (NUM_CONTAINER_FRAMES or 13) do
-        for i = 1, (MAX_CONTAINER_ITEMS or 36) do
-            local btn = _G["ContainerFrame" .. f .. "Item" .. i]
-            if btn and not hooked[btn] then
-                btn:HookScript("OnEnter", OnItemEnter)
-                hooked[btn] = true
-            end
-        end
-    end
-end
+hooksecurefunc(GameTooltip, "SetBagItem", OnSetBagItem)
 
 ---------------------------------------------------------------------------
 -- Événements et commande
@@ -209,15 +196,11 @@ end
 
 local pendingMacros = true
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")
-ev:RegisterEvent("BAG_OPEN")
 ev:SetScript("OnEvent", function(_, event)
-    if event == "PLAYER_LOGIN" or event == "BAG_OPEN" then
-        HookBagButtons()
-    elseif event == "PLAYER_REGEN_DISABLED" then
+    if event == "PLAYER_REGEN_DISABLED" then
         HideOverlay()  -- encore possible à l'entrée en combat
     end
     if pendingMacros and (event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED") then
@@ -233,7 +216,11 @@ SlashCmdList.ROGUEPLZ = function(msg)
     msg = (msg or ""):lower()
     if msg == "macros" then
         SetupMacros(true)
+    elseif msg == "debug" then
+        debug = not debug
+        Print("debug " .. (debug and "activé" or "désactivé") .. ".")
     else
         Print("/rogueplz macros : recrée et remet à jour les macros.")
+        Print("/rogueplz debug : affiche ce que l'addon voit au survol des objets.")
     end
 end
