@@ -2,7 +2,7 @@
 --  1. Crée les macros d'ouverture (noms de sorts dans la langue du client).
 --  2. Clic droit sur un coffre verrouillé du sac = Crochetage dessus.
 
-local ADDON = ...
+local ADDON, ns = ...
 local _, class = UnitClass("player")
 if class ~= "ROGUE" then return end
 
@@ -291,6 +291,7 @@ local function RegisterPanel()
     if Settings and Settings.RegisterCanvasLayoutCategory then
         settingsCategory = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
         Settings.RegisterAddOnCategory(settingsCategory)
+        ns.category = settingsCategory  -- parent du panneau de StealHistory.lua
     elseif InterfaceOptions_AddCategory then
         InterfaceOptions_AddCategory(panel)
     end
