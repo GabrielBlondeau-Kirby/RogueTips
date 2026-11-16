@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: RogueTips
-## Notes: Rogue helpers: stealth opener macros, right-click Pick Lock on bag lockboxes, Pick Pocket history.
-## Notes-frFR: Aides voleur : macros d'ouverture en camouflage, Crochetage au clic droit sur les coffres du sac, historique de Vol à la tire.
+## Notes: Rogue helpers: stealth opener macros, right-click Pick Lock on bag lockboxes, Pick Pocket history, damage numbers styled by school.
+## Notes-frFR: Aides voleur : macros d'ouverture en camouflage, Crochetage au clic droit sur les coffres du sac, historique de Vol à la tire, chiffres de dégâts selon leur nature.
 ## IconTexture: Interface\Icons\Ability_Stealth
 ## Author: Kirbye
 ## Version: @project-version@
@@ -11,3 +11,4 @@
 RogueTips.lua
 Locales.lua
 StealHistory.lua
+DamageText.lua
