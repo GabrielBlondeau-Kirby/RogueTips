@@ -25,6 +25,7 @@ local DEFAULTS = {
     history = {},
 }
 local db = DEFAULTS
+ns.steal = {}  -- partagé avec StealJournal.lua (grande fenêtre)
 
 -- Valeurs « secrètes » des clients récents (noms d'unités en instance,
 -- en combat…) : on ne peut ni les comparer ni les sauvegarder. On les ignore.
@@ -50,9 +51,107 @@ local castAt, castTarget = 0, nil
 local stealing = false     -- fenêtre de butin du vol ouverte
 local windowEnd = 0        -- fin de la période où les messages du chat sont « volés »
 local moneyBefore = 0      -- argent au moment du sort
+local lastCast, countedCast = 0, nil  -- un vol = un sort, même s'il donne pièces + objet
+local stealMoney = 0       -- pièces du vol en cours (pour le meilleur vol)
 
 local Refresh  -- fenêtre, définie plus bas
 local debug = false  -- /sh debug
+
+---------------------------------------------------------------------------
+-- Statistiques : un « seau » par session, un pour le total, un par mois archivé.
+-- Au-delà de MAX_SESSIONS, la plus ancienne session est fusionnée dans
+-- l'archive de son mois : on garde les totaux, on perd seulement le découpage.
+---------------------------------------------------------------------------
+
+local MAX_SESSIONS = 100
+
+local function NewBucket(start)
+    start = start or time()
+    return { money = 0, steals = 0, nitems = 0, best = 0, start = start, stop = start,
+             items = {}, targets = {}, zones = {} }
+end
+
+local function Duration(b) return b.time or math.max(0, b.stop - b.start) end
+
+local function Merge(into, b)
+    into.money = into.money + b.money
+    into.steals = into.steals + b.steals
+    into.nitems = into.nitems + b.nitems
+    into.best = math.max(into.best, b.best)
+    into.start = math.min(into.start, b.start)
+    into.stop = math.max(into.stop, b.stop)
+    into.time = (into.time or 0) + Duration(b)
+    for id, it in pairs(b.items) do
+        local t = into.items[id]
+        if t then t.n = t.n + it.n else into.items[id] = { n = it.n, link = it.link } end
+    end
+    for name, t in pairs(b.targets) do
+        local u = into.targets[name] or { m = 0, n = 0 }
+        u.m, u.n = u.m + t.m, u.n + t.n
+        into.targets[name] = u
+    end
+    for zone, n in pairs(b.zones) do into.zones[zone] = (into.zones[zone] or 0) + n end
+end
+
+local function Archive(b)
+    local key, list = date("%Y-%m", b.start), db.stats.archives
+    local arch
+    for _, a in ipairs(list) do if a.key == key then arch = a break end end
+    if not arch then
+        arch = NewBucket(b.start)
+        arch.key, arch.time = key, 0
+        list[#list + 1] = arch
+        table.sort(list, function(x, y) return x.key > y.key end)
+    end
+    Merge(arch, b)
+end
+
+-- Nouvelle session à la connexion (pas au /reload). Une session sans vol est jetée.
+local function StartSession()
+    local s = db.stats.sessions
+    if s[1] and s[1].steals == 0 then table.remove(s, 1) end
+    table.insert(s, 1, NewBucket())
+    while #s > MAX_SESSIONS do Archive(table.remove(s)) end
+end
+
+local function Bump(b, entry, newSteal, zone)
+    b.stop = time()
+    local t = castTarget and b.targets[castTarget]
+    if newSteal then
+        b.steals = b.steals + 1
+        if zone then b.zones[zone] = (b.zones[zone] or 0) + 1 end
+        if castTarget then
+            t = t or { m = 0, n = 0 }
+            t.n = t.n + 1
+            b.targets[castTarget] = t
+        end
+    end
+    if entry.money then
+        b.money = b.money + entry.money
+        if t then t.m = t.m + entry.money end
+        b.best = math.max(b.best, stealMoney)
+    end
+    if entry.link then
+        local id = entry.link:match("item:(%d+)")
+        local n = entry.count or 1
+        if id then
+            local it = b.items[id] or { n = 0 }
+            it.n, it.link = it.n + n, entry.link
+            b.items[id] = it
+        end
+        b.nitems = b.nitems + n
+    end
+end
+
+local function Record(entry)
+    local newSteal = lastCast ~= countedCast
+    if newSteal then countedCast, stealMoney = lastCast, 0 end
+    if entry.money then stealMoney = stealMoney + entry.money end
+    local zone = Readable(GetRealZoneText and GetRealZoneText())
+    if not db.stats.sessions[1] then StartSession() end
+    Bump(db.stats.all, entry, newSteal, zone)
+    Bump(db.stats.sessions[1], entry, newSteal, zone)
+end
 
 local function Add(entry)
     entry.target = castTarget
@@ -60,6 +159,8 @@ local function Add(entry)
     table.insert(db.history, 1, entry)
     for i = #db.history, db.max + 1, -1 do db.history[i] = nil end
     if entry.money then db.total = (db.total or 0) + entry.money end
+    Record(entry)
+    if ns.steal.OnSteal then ns.steal.OnSteal() end
     -- On ouvre d'abord : OnShow remplit la liste, et une erreur dans la mise
     -- à jour ne peut plus empêcher l'ouverture.
     local f = StealHistoryFrame
@@ -316,19 +417,51 @@ local function Row(i)
     return r
 end
 
-Refresh = function()
+-- Nom coloré (qualité) et icône tirés d'un lien « |cffffffff|Hitem:…|h[Nom]|h|r ».
+local function ItemLook(link)
+    local color = link:match("|c(%x%x%x%x%x%x%x%x)") or "ffffffff"
+    local name = link:match("%[(.-)%]") or link
+    local icon = (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(link))
+        or (GetItemIcon and GetItemIcon(link))
+    return "|c" .. color .. name .. "|r", icon or ICON
+end
+
+-- Objets d'un seau, du plus volé au moins volé.
+local function SortedItems(b)
+    local list = {}
+    for _, it in pairs(b.items) do list[#list + 1] = it end
+    table.sort(list, function(x, y)
+        if x.n ~= y.n then return x.n > y.n end
+        return (x.link:match("%[(.-)%]") or "") < (y.link:match("%[(.-)%]") or "")
+    end)
+    return list
+end
+
+local function ItemEnter(self)
+    if not self.link then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetHyperlink(self.link)
+    GameTooltip:Show()
+end
+local function ItemClick(self)
+    if self.link and IsModifiedClick("CHATLINK") then ChatEdit_InsertLink(self.link) end
+end
+
+-- Onglets : Récents / Stats / Butin --------------------------------------
+
+local TAB_H = 26
+local tab = "recent"
+local panes = {}
+
+local function RefreshRecent()
     local n = math.min(#db.history, db.max)
     for i = 1, n do
         local e, r = db.history[i], Row(i)
         r.entry = e
         if e.link then
-            -- Nom et couleur de qualité tirés du lien : « |cffffffff|Hitem:…|h[Nom]|h|r ».
-            local color = e.link:match("|c(%x%x%x%x%x%x%x%x)") or "ffffffff"
-            local name = e.name or e.link:match("%[(.-)%]") or e.link
-            local icon = e.icon or (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(e.link))
-                or (GetItemIcon and GetItemIcon(e.link))
-            r.icon:SetTexture(icon or ICON)
-            r.name:SetText("|c" .. color .. name .. "|r")
+            local name, icon = ItemLook(e.link)
+            r.icon:SetTexture(icon)
+            r.name:SetText(name)
             r.count:SetText((e.count or 1) > 1 and e.count or "")
         else
             r.icon:SetTexture(COIN_ICON)
@@ -341,9 +474,186 @@ Refresh = function()
         r:Show()
     end
     for i = n + 1, #rows do rows[i]:Hide() end
+    empty:ClearAllPoints()
+    empty:SetPoint("TOP", 0, -50)
+    empty:SetText(L.EMPTY)
     empty:SetShown(n == 0)
+    return math.max(n, 1) * ROW_H + 50
+end
+
+-- Stats : deux encadrés (session, total) puis moyenne et meilleur vol.
+local stats = CreateFrame("Frame", nil, frame)
+stats:SetPoint("TOPLEFT", 22, -32)
+stats:SetPoint("RIGHT", -22, 0)
+stats:SetHeight(170)
+panes.stats = stats
+
+local function Box(parent, y)
+    local b = CreateFrame("Frame", nil, parent, BACKDROP_TEMPLATE)
+    b:SetPoint("TOPLEFT", 0, y)
+    b:SetPoint("RIGHT")
+    b:SetHeight(58)
+    if b.SetBackdrop then
+        b:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+        b:SetBackdropColor(0, 0, 0, 0.5)
+        b:SetBackdropBorderColor(0.55, 0.45, 0.25)
+    end
+    b.label = b:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    b.label:SetPoint("TOPLEFT", 8, -7)
+    b.value = b:CreateFontString(nil, "ARTWORK", "GameFontHighlightLarge")
+    b.value:SetPoint("TOPLEFT", b.label, "BOTTOMLEFT", 0, -3)
+    b.sub = b:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+    b.sub:SetPoint("TOPLEFT", b.value, "BOTTOMLEFT", 0, -2)
+    return b
+end
+local boxSession, boxTotal = Box(stats, 0), Box(stats, -64)
+
+local function StatLine(y, label)
+    local l = stats:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    l:SetPoint("TOPLEFT", 4, y)
+    l:SetText(label)
+    local v = stats:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    v:SetPoint("TOPRIGHT", -4, y)
+    return v
+end
+local avgValue = StatLine(-132, L.AVG)
+local bestValue = StatLine(-150, L.BEST)
+
+local function RefreshStats()
+    local st, cur = db.stats, db.stats.sessions[1] or NewBucket()
+    boxSession.label:SetText(L.SESSION:format(date("%H:%M", cur.start)))
+    boxSession.value:SetText(Coins(cur.money))
+    boxSession.sub:SetText(L.COUNTS:format(cur.steals, cur.nitems))
+    boxTotal.label:SetText(L.TOTAL)
+    boxTotal.value:SetText(Coins(db.total or 0))
+    boxTotal.sub:SetText(L.COUNTS:format(st.all.steals, st.all.nitems))
+    avgValue:SetText(st.all.steals > 0 and Coins(math.floor(st.all.money / st.all.steals)) or "-")
+    bestValue:SetText(st.all.best > 0 and Coins(st.all.best) or "-")
+    return 180 + 44
+end
+
+-- Butin : récapitulatif des objets, session ou total.
+local LOOT_ROWS, LOOT_H = 10, 22
+local loot = CreateFrame("Frame", nil, frame)
+loot:SetPoint("TOPLEFT", 22, -32)
+loot:SetPoint("RIGHT", -22, 0)
+loot:SetHeight(30)
+panes.loot = loot
+local lootPeriod = "session"
+
+local periodBtns = {}
+local function PeriodButton(key, label, x)
+    local b = CreateFrame("Button", nil, loot, "UIPanelButtonTemplate")
+    b:SetSize(80, 20)
+    b:SetPoint("TOPLEFT", x, 0)
+    b:SetText(label)
+    b:SetScript("OnClick", function() lootPeriod = key; Refresh() end)
+    periodBtns[key] = b
+end
+PeriodButton("session", L.P_SESSION, 0)
+PeriodButton("total", L.P_TOTAL, 84)
+
+local lootRows = {}
+for i = 1, LOOT_ROWS do
+    local r = CreateFrame("Button", nil, loot)
+    r:SetHeight(LOOT_H - 2)
+    r:SetPoint("TOPLEFT", 0, -26 - (i - 1) * LOOT_H)
+    r:SetPoint("RIGHT")
+    r.icon = r:CreateTexture(nil, "ARTWORK")
+    r.icon:SetSize(18, 18)
+    r.icon:SetPoint("LEFT")
+    r.name = r:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+    r.name:SetPoint("RIGHT", -40, 0)
+    r.name:SetJustifyH("LEFT")
+    r.name:SetWordWrap(false)
+    r.count = r:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    r.count:SetPoint("RIGHT", -2, 0)
+    r:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    r:SetScript("OnEnter", ItemEnter)
+    r:SetScript("OnLeave", GameTooltip_Hide)
+    r:SetScript("OnClick", ItemClick)
+    lootRows[i] = r
+end
+local lootMore = loot:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+
+local function RefreshLoot()
+    for key, b in pairs(periodBtns) do
+        if key == lootPeriod then b:LockHighlight() else b:UnlockHighlight() end
+    end
+    local b = lootPeriod == "total" and db.stats.all or db.stats.sessions[1] or NewBucket()
+    local list = SortedItems(b)
+    local n = math.min(#list, LOOT_ROWS)
+    for i = 1, LOOT_ROWS do
+        local r, it = lootRows[i], list[i]
+        if i <= n then
+            local name, icon = ItemLook(it.link)
+            r.link = it.link
+            r.icon:SetTexture(icon)
+            r.name:SetText(name)
+            r.count:SetText("×" .. it.n)
+            r:Show()
+        else
+            r:Hide()
+        end
+    end
+    lootMore:ClearAllPoints()
+    lootMore:SetPoint("TOPLEFT", 0, -28 - n * LOOT_H)
+    lootMore:SetText(#list > n and L.MORE:format(#list - n) or "")
+    empty:ClearAllPoints()
+    empty:SetPoint("TOP", 0, -66)
+    empty:SetText(L.NO_LOOT)
+    empty:SetShown(n == 0)
+    return 26 + math.max(n, 1) * LOOT_H + (#list > n and 16 or 0) + 50 + 8
+end
+
+local tabBtns = {}
+local function SelectTab(key)
+    tab = key
+    Refresh()
+end
+local TABS = { { "recent", L.TAB_RECENT }, { "stats", L.TAB_STATS }, { "loot", L.TAB_LOOT } }
+for i, t in ipairs(TABS) do
+    local b = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    b:SetSize((WIDTH - 44) / 3 - 2, 22)
+    b:SetPoint("BOTTOMLEFT", 22 + (i - 1) * ((WIDTH - 44) / 3), 14)
+    b:SetText(t[2])
+    b:SetScript("OnClick", function() SelectTab(t[1]) end)
+    tabBtns[t[1]] = b
+end
+
+-- Livre dans le coin : ouvre le Journal du voleur (StealJournal.lua).
+local book = CreateFrame("Button", nil, frame)
+book:SetSize(20, 20)
+book:SetPoint("RIGHT", close, "LEFT", 0, 0)
+book:SetNormalTexture("Interface\\Icons\\INV_Misc_Book_09")
+book:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+book:SetScript("OnClick", function() if ns.steal.ToggleJournal then ns.steal.ToggleJournal() end end)
+book:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(L.JOURNAL)
+    GameTooltip:Show()
+end)
+book:SetScript("OnLeave", GameTooltip_Hide)
+
+Refresh = function()
+    if tab ~= "recent" then
+        for i = 1, #rows do rows[i]:Hide() end
+    end
+    stats:SetShown(tab == "stats")
+    loot:SetShown(tab == "loot")
+    empty:Hide()
+    local h
+    if tab == "stats" then h = RefreshStats()
+    elseif tab == "loot" then h = RefreshLoot()
+    else h = RefreshRecent() end
+    for key, b in pairs(tabBtns) do
+        if key == tab then b:LockHighlight() else b:UnlockHighlight() end
+    end
     UpdateTitle()
-    frame:SetHeight(math.max(n, 1) * ROW_H + 50)
+    frame:SetHeight(h + TAB_H)
 end
 
 frame:SetScript("OnShow", Refresh)
@@ -477,13 +787,38 @@ local clear = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 clear:SetSize(180, 24)
 clear:SetPoint("TOPLEFT", cbNoCombat, "BOTTOMLEFT", 4, -20)
 clear:SetText(L.CLEAR)
-clear:SetScript("OnClick", function() wipe(db.history); db.total = 0; Refresh() end)
+clear:SetScript("OnClick", function() wipe(db.history); Refresh() end)
 
 local show = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 show:SetSize(180, 24)
 show:SetPoint("LEFT", clear, "RIGHT", 10, 0)
 show:SetText(L.SHOW)
 show:SetScript("OnClick", Toggle)
+
+local function ResetStats()
+    db.total = 0
+    db.stats = { all = NewBucket(), sessions = {}, archives = {} }
+    StartSession()
+    Refresh()
+    if ns.steal.OnSteal then ns.steal.OnSteal() end
+    Print(L.STATS_RESET)
+end
+StaticPopupDialogs.ROGUETIPS_RESET_STATS = {
+    text = L.RESET_CONFIRM, button1 = YES, button2 = NO,
+    OnAccept = ResetStats, timeout = 0, whileDead = true, hideOnEscape = true,
+}
+
+local journalBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+journalBtn:SetSize(180, 24)
+journalBtn:SetPoint("TOPLEFT", clear, "BOTTOMLEFT", 0, -8)
+journalBtn:SetText(L.OPEN_JOURNAL)
+journalBtn:SetScript("OnClick", function() if ns.steal.ToggleJournal then ns.steal.ToggleJournal() end end)
+
+local resetBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+resetBtn:SetSize(180, 24)
+resetBtn:SetPoint("LEFT", journalBtn, "RIGHT", 10, 0)
+resetBtn:SetText(L.RESET_STATS)
+resetBtn:SetScript("OnClick", function() StaticPopup_Show("ROGUETIPS_RESET_STATS") end)
 
 panel:SetScript("OnShow", function() for _, f in ipairs(refreshers) do f() end end)
 
@@ -549,7 +884,10 @@ SetMinimapShown = function(shown)
 end
 
 mm:SetScript("OnClick", function(_, button)
-    if button == "RightButton" then OpenPanel() else Toggle() end
+    if IsShiftKeyDown() then OpenPanel()
+    elseif button == "RightButton" then
+        if ns.steal.ToggleJournal then ns.steal.ToggleJournal() end
+    else Toggle() end
 end)
 mm:SetScript("OnDragStart", function(self)
     self:SetScript("OnUpdate", function()
@@ -566,10 +904,17 @@ mm:SetScript("OnEnter", function(self)
     GameTooltip:SetText("StealHistory", 0.2, 1, 0.6)
     GameTooltip:AddLine(L.MM_LEFT, 1, 1, 1)
     GameTooltip:AddLine(L.MM_RIGHT, 1, 1, 1)
+    GameTooltip:AddLine(L.MM_SHIFT, 1, 1, 1)
     GameTooltip:AddLine(L.MM_DRAG, 0.6, 0.6, 0.6)
     GameTooltip:Show()
 end)
 mm:SetScript("OnLeave", GameTooltip_Hide)
+
+-- Pour StealJournal.lua.
+ns.steal.DB = function() return db end
+ns.steal.Coins, ns.steal.ItemLook, ns.steal.SortedItems = Coins, ItemLook, SortedItems
+ns.steal.Duration, ns.steal.ItemEnter, ns.steal.ItemClick = Duration, ItemEnter, ItemClick
+ns.steal.Backdrop, ns.steal.Refresh = BACKDROP_TEMPLATE, function() if frame:IsShown() then Refresh() end end
 
 ---------------------------------------------------------------------------
 -- Événements et commande
@@ -586,10 +931,20 @@ ev:RegisterEvent("LOOT_CLOSED")
 ev:RegisterEvent("PLAYER_MONEY")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+ev:RegisterEvent("PLAYER_ENTERING_WORLD")
+ev:RegisterEvent("PLAYER_LOGOUT")
 ev:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
         inCombat = event == "PLAYER_REGEN_DISABLED"
         ApplyVisibility()
+        return
+    end
+    if event == "PLAYER_ENTERING_WORLD" then
+        local isLogin = ...
+        if isLogin or not db.stats.sessions[1] then StartSession() end
+        return
+    elseif event == "PLAYER_LOGOUT" then
+        if db.stats.sessions[1] then db.stats.sessions[1].stop = time() end
         return
     end
     if event == "ADDON_LOADED" then
@@ -606,6 +961,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
             db.total = 0
             for _, e in ipairs(db.history) do db.total = db.total + (e.money or 0) end
         end
+        db.stats = db.stats or { all = NewBucket(), sessions = {}, archives = {} }
         RegisterPanel()
         PlaceMinimapButton()
         mm:SetShown(not db.minimap.hide)
@@ -614,6 +970,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
         local _, target, _, spellID = ...
         if spellID == PICK_POCKET then
             castAt = GetTime()
+            lastCast = castAt
             moneyBefore = GetMoney()
             castTarget = Readable(target) or Readable((UnitName("target")))
         end
@@ -647,8 +1004,10 @@ SlashCmdList.STEALHISTORY = function(msg)
     if msg == "options" or msg == "config" then
         OpenPanel()
     elseif msg == "clear" then
-        wipe(db.history); db.total = 0; Refresh()
+        wipe(db.history); Refresh()
         Print(L.CLEARED)
+    elseif msg == "journal" or msg == "stats" then
+        if ns.steal.ToggleJournal then ns.steal.ToggleJournal() end
     elseif msg == "debug" then
         debug = not debug
         Print("debug " .. (debug and "on" or "off"))
