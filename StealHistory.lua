@@ -278,6 +278,10 @@ local function ApplyVisibility()
     local reduced = inCombat and db.visibility == "always" and db.combatReduce
     holder:SetAlpha((reduced and db.combatAlpha or db.alpha) / 100)
     frame:SetScale(reduced and db.combatScale / 100 or 1)
+    -- Le cadre du titre reste opaque, comme celui du journal (sauf réduction en combat).
+    if ns.steal.headerFrame and ns.steal.headerFrame.SetIgnoreParentAlpha then
+        ns.steal.headerFrame:SetIgnoreParentAlpha(not reduced)
+    end
     Place()
 end
 frame:SetSize(WIDTH, 120)
@@ -309,6 +313,7 @@ local HEADER_TEX = "Interface\\DialogFrame\\UI-DialogBox-Header"
 local headerFrame = CreateFrame("Frame", nil, frame)  -- au-dessus de la bordure de la fenêtre
 headerFrame:SetAllPoints()
 headerFrame:SetFrameLevel(frame:GetFrameLevel() + 10)
+ns.steal.headerFrame = headerFrame
 -- Icône en haut à gauche, comme le cadre de butin.
 local portrait = headerFrame:CreateTexture(nil, "OVERLAY")
 portrait:SetSize(46, 46)

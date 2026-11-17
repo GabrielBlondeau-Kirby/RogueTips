@@ -30,6 +30,11 @@ frame:SetBackdrop({
     tile = true, tileSize = 32, edgeSize = 32,
     insets = { left = 11, right = 12, top = 12, bottom = 11 },
 })
+-- Fond plein sous la texture de boîte de dialogue (semi-transparente) : rien ne se voit à travers.
+local solid = frame:CreateTexture(nil, "BACKGROUND", nil, -8)
+solid:SetPoint("TOPLEFT", 11, -12)
+solid:SetPoint("BOTTOMRIGHT", -12, 11)
+solid:SetColorTexture(0.04, 0.035, 0.03, 1)
 frame:Hide()
 tinsert(UISpecialFrames, "RogueTipsStealJournal")
 
@@ -96,7 +101,9 @@ listBg:SetPoint("TOPLEFT", 22, -84)
 listBg:SetPoint("BOTTOMLEFT", 22, 20)
 listBg:SetWidth(LIST_W + 26)
 
-local scroll = CreateFrame("ScrollFrame", nil, listBg, "UIPanelScrollFrameTemplate")
+local scroll = CreateFrame("ScrollFrame", "RogueTipsStealJournalScroll", listBg, "UIPanelScrollFrameTemplate")
+scroll.scrollBarHideable = true
+local scrollBar = scroll.ScrollBar or _G["RogueTipsStealJournalScrollScrollBar"]
 scroll:SetPoint("TOPLEFT", 5, -5)
 scroll:SetPoint("BOTTOMRIGHT", -27, 5)
 local content = CreateFrame("Frame", nil, scroll)
@@ -316,7 +323,8 @@ Refresh = function()
         btn.label:SetText(Label(e))
         btn.money:SetText(S.Coins(e.b.money))
         if e.kind == "all" then
-            btn.info:SetText(L.N_SESSIONS:format(#entries - 1))
+            local ns_ = #entries - 1
+            btn.info:SetText(ns_ == 1 and L.ONE_SESSION or L.N_SESSIONS:format(ns_))
             btn.zone:SetText("")
         else
             btn.info:SetText(DurationText(e.b) .. " · " .. L.N_STEALS:format(e.b.steals))
@@ -326,6 +334,7 @@ Refresh = function()
     end
     for i = #entries + 1, #buttons do buttons[i]:Hide() end
     content:SetHeight(#entries * ENTRY_H)
+    if scrollBar then scrollBar:SetShown(#entries * ENTRY_H > scroll:GetHeight()) end
 
     -- détail
     local e = entries[selected]
