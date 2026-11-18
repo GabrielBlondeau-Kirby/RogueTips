@@ -398,7 +398,6 @@ titleHit:SetScript("OnDragStart", function() if not cfg.locked then frame:StartM
 titleHit:SetScript("OnDragStop", function() frame:GetScript("OnDragStop")(frame) end)
 titleHit:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:SetText(TITLE)
     GameTooltip:AddDoubleLine(L.TIP_SESSION, Coins(SessionMoney()), 1, 0.82, 0, 1, 1, 1)
     GameTooltip:AddDoubleLine(L.TIP_TOTAL, Coins(db.total or 0), 1, 0.82, 0, 1, 1, 1)
     GameTooltip:Show()
