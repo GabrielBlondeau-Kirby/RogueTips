@@ -96,6 +96,9 @@ local enUS = {
     SHOW_TABS      = "Tabs",
     SHOW_BOOK      = "Journal button",
     SHOW_CLOSE     = "Close button",
+    TITLE_OPAQUE   = "Title always opaque",
+    TITLE_X        = "Title offset, horizontal: %d px",
+    TITLE_Y        = "Title offset, vertical: %d px",
 }
 
 local locales = {
@@ -192,6 +195,9 @@ local locales = {
         SHOW_TABS      = "Onglets",
         SHOW_BOOK      = "Bouton du journal",
         SHOW_CLOSE     = "Croix de fermeture",
+        TITLE_OPAQUE   = "Titre toujours opaque",
+        TITLE_X        = "Décalage du titre, horizontal : %d px",
+        TITLE_Y        = "Décalage du titre, vertical : %d px",
     },
     deDE = {
         TITLE          = "Diebstahl",

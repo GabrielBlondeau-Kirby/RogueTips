@@ -26,6 +26,7 @@ local PROFILE_DEFAULTS = {
     minimap = { angle = 200, hide = false },
     scale = 100, bgAlpha = 100, locked = false, compact = false,
     hoverFade = false, hoverAlpha = 25, autoClose = 0,
+    titleOpaque = true, titleX = 0, titleY = 0,
     show = { logo = true, title = true, amount = true, time = true, target = true,
              nameFrame = true, tabs = true, book = true, close = true },
 }
@@ -314,9 +315,10 @@ local function ApplyVisibility()
     holder:SetAlpha(a)
     frame:SetScale(cfg.scale / 100 * (reduced and cfg.combatScale / 100 or 1))
     if frame.SetBackdropColor then frame:SetBackdropColor(1, 1, 1, cfg.bgAlpha / 100) end
-    -- Le cadre du titre reste opaque, comme celui du journal (sauf réduction en combat ou survol).
+    -- Cadre du titre : opaque si l'option est cochée, sinon suit la fenêtre
+    -- (sauf réduction en combat ou estompage, où il s'estompe avec elle).
     if ns.steal.headerFrame and ns.steal.headerFrame.SetIgnoreParentAlpha then
-        ns.steal.headerFrame:SetIgnoreParentAlpha(not reduced and not faded)
+        ns.steal.headerFrame:SetIgnoreParentAlpha(cfg.titleOpaque or (not reduced and not faded))
     end
     Place()
 end
@@ -743,6 +745,8 @@ end
 -- Éléments affichés et mode compact (profil).
 local function ApplyLayout()
     local sh = cfg.show
+    header:ClearAllPoints()
+    header:SetPoint("TOP", 12 + cfg.titleX, 12 + cfg.titleY)
     portrait:SetShown(sh.logo)
     for _, t in ipairs({ header, headerL, headerR, title }) do t:SetShown(sh.title) end
     titleHit:SetShown(sh.title)
@@ -809,7 +813,7 @@ local pscroll = CreateFrame("ScrollFrame", "StealHistoryOptionsScroll", panel, "
 pscroll:SetPoint("TOPLEFT", 0, -6)
 pscroll:SetPoint("BOTTOMRIGHT", -28, 6)
 local opts = CreateFrame("Frame", nil, pscroll)
-opts:SetSize(620, 1300)
+opts:SetSize(620, 1420)
 pscroll:SetScrollChild(opts)
 
 local ptitle = opts:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
@@ -972,7 +976,12 @@ local sAlpha = Slider(sScale, 0, -36, 10, 100, 5,
     function(v) return L.OPACITY:format(v) end, "alpha", ApplyVisibility)
 local sBg = Slider(sAlpha, 0, -36, 0, 100, 5,
     function(v) return L.BG_OPACITY:format(v) end, "bgAlpha", ApplyVisibility)
-local cbCompact = CheckBox(sBg, -4, -26, L.COMPACT, Option("compact", ApplyLayout))
+local cbTitleOpaque = CheckBox(sBg, -4, -26, L.TITLE_OPAQUE, Option("titleOpaque", ApplyVisibility))
+local sTitleX = Slider(cbTitleOpaque, 4, -22, -80, 80, 1,
+    function(v) return L.TITLE_X:format(v) end, "titleX", ApplyLayout)
+local sTitleY = Slider(sTitleX, 0, -36, -20, 30, 1,
+    function(v) return L.TITLE_Y:format(v) end, "titleY", ApplyLayout)
+local cbCompact = CheckBox(sTitleY, -4, -26, L.COMPACT, Option("compact", ApplyLayout))
 local cbLock = CheckBox(cbCompact, 0, -4, L.LOCK, Option("locked"))
 local hoverWidgets = {}
 local function UpdateHoverOptions()
