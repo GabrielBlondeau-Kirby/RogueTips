@@ -18,13 +18,38 @@ local BACKDROP_TEMPLATE = BackdropTemplateMixin and "BackdropTemplate" or nil
 -- visibility : "always" (tout le temps) ou "nocombat" (cachée en combat).
 -- combatReduce : avec "always", en combat la fenêtre passe à combatAlpha
 -- et combatScale.
-local DEFAULTS = {
+-- Réglages : rangés dans un profil partagé entre personnages (RogueTipsDB.stealProfiles).
+-- Les données (historique, total, stats) restent propres au personnage (StealHistoryDB).
+local PROFILE_DEFAULTS = {
     max = 5, replaceChat = true, autoShow = false,
     alpha = 100, visibility = "always", combatReduce = false, combatAlpha = 40, combatScale = 70,
     minimap = { angle = 200, hide = false },
-    history = {},
+    scale = 100, bgAlpha = 100, locked = false, compact = false,
+    hoverFade = false, hoverAlpha = 25, autoClose = 0,
+    show = { logo = true, title = true, amount = true, time = true, target = true,
+             nameFrame = true, tabs = true, book = true, close = true },
 }
-local db = DEFAULTS
+local PROFILE_KEYS = { "max", "replaceChat", "autoShow", "alpha", "visibility", "combatReduce",
+    "combatAlpha", "combatScale", "minimap", "pos" }  -- anciens réglages par personnage
+
+local function Copy(t)
+    if type(t) ~= "table" then return t end
+    local c = {}
+    for k, v in pairs(t) do c[k] = Copy(v) end
+    return c
+end
+-- Complète un profil avec les valeurs par défaut manquantes (nouvelles options).
+local function Fill(p, d)
+    for k, v in pairs(d) do
+        if p[k] == nil then p[k] = Copy(v)
+        elseif type(v) == "table" and type(p[k]) == "table" then Fill(p[k], v) end
+    end
+    return p
+end
+
+local db = { history = {}, stats = nil }
+local cfg = Copy(PROFILE_DEFAULTS)
+local profiles  -- RogueTipsDB.stealProfiles
 ns.steal = {}  -- partagé avec StealJournal.lua (grande fenêtre)
 
 -- Valeurs « secrètes » des clients récents (noms d'unités en instance,
@@ -54,7 +79,7 @@ local moneyBefore = 0      -- argent au moment du sort
 local lastCast, countedCast = 0, nil  -- un vol = un sort, même s'il donne pièces + objet
 local stealMoney = 0       -- pièces du vol en cours (pour le meilleur vol)
 
-local Refresh  -- fenêtre, définie plus bas
+local Refresh, ScheduleAutoClose  -- fenêtre, définis plus bas
 local debug = false  -- /sh debug
 
 ---------------------------------------------------------------------------
@@ -157,17 +182,23 @@ local function Add(entry)
     entry.target = castTarget
     entry.time = time()
     table.insert(db.history, 1, entry)
-    for i = #db.history, db.max + 1, -1 do db.history[i] = nil end
+    for i = #db.history, cfg.max + 1, -1 do db.history[i] = nil end
     if entry.money then db.total = (db.total or 0) + entry.money end
     Record(entry)
     if ns.steal.OnSteal then ns.steal.OnSteal() end
     -- On ouvre d'abord : OnShow remplit la liste, et une erreur dans la mise
     -- à jour ne peut plus empêcher l'ouverture.
     local f = StealHistoryFrame
-    if db.autoShow and not f:IsShown() then f:Show() else Refresh() end
+    if cfg.autoShow and not f:IsShown() then
+        ns.steal.AutoOpened()
+        f:Show()
+    else
+        Refresh()
+    end
+    ScheduleAutoClose()
     if debug then
         Print(("vol enregistré (%s) | autoShow=%s, fenêtre=%s, visible=%s, alpha=%.2f, combat=%s"):format(
-            entry.link or (entry.money .. " cuivre"), tostring(db.autoShow), tostring(f:IsShown()),
+            entry.link or (entry.money .. " cuivre"), tostring(cfg.autoShow), tostring(f:IsShown()),
             tostring(f:IsVisible()), f:GetEffectiveAlpha(), tostring(InCombatLockdown())))
     end
 end
@@ -220,7 +251,7 @@ local function RecordLoot(msg)
 end
 
 local function ChatFilter(_, event, msg, ...)
-    if not db.replaceChat or not InWindow() or Secret(msg) then return false end
+    if not cfg.replaceChat or not InWindow() or Secret(msg) then return false end
     for _, pat in ipairs(PATTERNS[event]) do
         local what, count = msg:match(pat)
         if what then
@@ -267,20 +298,25 @@ local frame = CreateFrame("Frame", "StealHistoryFrame", holder, BACKDROP_TEMPLAT
 -- La position est sauvée en unités d'UIParent : on la divise par l'échelle
 -- pour que la fenêtre réduite reste au même endroit.
 local function Place()
-    local p, s = db.pos or { "CENTER", "CENTER", 0, 0 }, frame:GetScale()
+    local p, s = cfg.pos or { "CENTER", "CENTER", 0, 0 }, frame:GetScale()
     frame:ClearAllPoints()
     frame:SetPoint(p[1], UIParent, p[2], p[3] / s, p[4] / s)
 end
 
 local inCombat = false
+local hovered = false  -- souris sur la fenêtre (option « nette au survol »)
 local function ApplyVisibility()
-    holder:SetShown(not (inCombat and db.visibility == "nocombat"))
-    local reduced = inCombat and db.visibility == "always" and db.combatReduce
-    holder:SetAlpha((reduced and db.combatAlpha or db.alpha) / 100)
-    frame:SetScale(reduced and db.combatScale / 100 or 1)
-    -- Le cadre du titre reste opaque, comme celui du journal (sauf réduction en combat).
+    holder:SetShown(not (inCombat and cfg.visibility == "nocombat"))
+    local reduced = inCombat and cfg.visibility == "always" and cfg.combatReduce
+    local faded = cfg.hoverFade and not hovered
+    local a = (reduced and cfg.combatAlpha or cfg.alpha) / 100
+    if faded then a = a * cfg.hoverAlpha / 100 end
+    holder:SetAlpha(a)
+    frame:SetScale(cfg.scale / 100 * (reduced and cfg.combatScale / 100 or 1))
+    if frame.SetBackdropColor then frame:SetBackdropColor(1, 1, 1, cfg.bgAlpha / 100) end
+    -- Le cadre du titre reste opaque, comme celui du journal (sauf réduction en combat ou survol).
     if ns.steal.headerFrame and ns.steal.headerFrame.SetIgnoreParentAlpha then
-        ns.steal.headerFrame:SetIgnoreParentAlpha(not reduced)
+        ns.steal.headerFrame:SetIgnoreParentAlpha(not reduced and not faded)
     end
     Place()
 end
@@ -291,12 +327,12 @@ frame:SetClampedToScreen(true)
 frame:SetMovable(true)
 frame:EnableMouse(true)
 frame:RegisterForDrag("LeftButton")
-frame:SetScript("OnDragStart", frame.StartMoving)
+frame:SetScript("OnDragStart", function(self) if not cfg.locked then self:StartMoving() end end)
 frame:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
     local point, _, rel, x, y = self:GetPoint()
     local s = self:GetScale()
-    db.pos = { point, rel, x * s, y * s }
+    cfg.pos = { point, rel, x * s, y * s }
 end)
 frame:SetBackdrop({
     bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -339,12 +375,33 @@ local title = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 title:SetPoint("TOP", header, "TOP", 0, -14)
 local TITLE = L.TITLE
 
--- Titre + total des pièces volées à sa droite ; le bandeau suit la largeur.
+-- Titre + pièces volées pendant la session ; le bandeau suit la largeur.
+-- Au survol du titre : session et total.
+local function SessionMoney()
+    local cur = db.stats and db.stats.sessions[1]
+    return cur and cur.money or 0
+end
 local function UpdateTitle()
-    local total = db.total or 0
-    title:SetText(total > 0 and (TITLE .. "   |cffffffff" .. Coins(total) .. "|r") or TITLE)
+    local money = SessionMoney()
+    local show = cfg.show.amount and money > 0
+    title:SetText(show and (TITLE .. "   |cffffffff" .. Coins(money) .. "|r") or TITLE)
     header:SetWidth(math.max(60, title:GetStringWidth() + 16))
 end
+
+local titleHit = CreateFrame("Button", nil, headerFrame)
+titleHit:SetPoint("TOPLEFT", headerL, "TOPLEFT", 8, -8)
+titleHit:SetPoint("BOTTOMRIGHT", headerR, "BOTTOMRIGHT", -8, 14)
+titleHit:RegisterForDrag("LeftButton")
+titleHit:SetScript("OnDragStart", function() if not cfg.locked then frame:StartMoving() end end)
+titleHit:SetScript("OnDragStop", function() frame:GetScript("OnDragStop")(frame) end)
+titleHit:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText(TITLE)
+    GameTooltip:AddDoubleLine(L.TIP_SESSION, Coins(SessionMoney()), 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddDoubleLine(L.TIP_TOTAL, Coins(db.total or 0), 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:Show()
+end)
+titleHit:SetScript("OnLeave", GameTooltip_Hide)
 
 local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", -4, -4)
@@ -375,28 +432,49 @@ local function RowClick(self)
 end
 
 -- Même construction qu'un bouton de butin : icône + cadre de nom doré.
+-- Mode compact : une ligne de 22 px, petite icône, ni cadre doré ni cible.
+local ROW_C = 22
+local function RowHeight() return cfg.compact and ROW_C or ROW_H end
+
+local function LayoutRow(r, i)
+    local compact, sh = cfg.compact, cfg.show
+    r:ClearAllPoints()
+    r:SetPoint("TOPLEFT", 22, -34 - (i - 1) * RowHeight())
+    r:SetSize(WIDTH - 40, RowHeight() - (compact and 2 or 4))
+    r.icon:SetSize(compact and 18 or 37, compact and 18 or 37)
+    r.border:SetShown(not compact)
+    r.nameFrame:SetShown(not compact and sh.nameFrame)
+    r.name:ClearAllPoints()
+    if compact then
+        r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+        r.name:SetFontObject("GameFontNormalSmall")
+    else
+        r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 8, -3)
+        r.name:SetFontObject("GameFontNormal")
+    end
+    r.name:SetWidth(WIDTH - (compact and 110 or 145))
+    r.sub:SetShown(not compact and sh.target)
+    r.time:SetShown(sh.time)
+    r.count:SetFontObject(compact and "NumberFontNormalSmall" or "NumberFontNormal")
+end
+
 local function Row(i)
     if rows[i] then return rows[i] end
     local r = CreateFrame("Button", nil, frame)
-    r:SetSize(WIDTH - 40, ROW_H - 4)
-    r:SetPoint("TOPLEFT", 22, -34 - (i - 1) * ROW_H)
 
     r.icon = r:CreateTexture(nil, "BORDER")
-    r.icon:SetSize(37, 37)
     r.icon:SetPoint("LEFT")
-    local border = r:CreateTexture(nil, "ARTWORK")
-    border:SetTexture("Interface\\Buttons\\UI-Quickslot2")
-    border:SetSize(64, 64)
-    border:SetPoint("CENTER", r.icon, "CENTER")
+    r.border = r:CreateTexture(nil, "ARTWORK")
+    r.border:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+    r.border:SetSize(64, 64)
+    r.border:SetPoint("CENTER", r.icon, "CENTER")
 
-    local nameFrame = r:CreateTexture(nil, "BACKGROUND")
-    nameFrame:SetTexture("Interface\\QuestFrame\\UI-QuestItemNameFrame")
-    nameFrame:SetSize(WIDTH - 120, 64)
-    nameFrame:SetPoint("LEFT", r.icon, "RIGHT", -10, 0)
+    r.nameFrame = r:CreateTexture(nil, "BACKGROUND")
+    r.nameFrame:SetTexture("Interface\\QuestFrame\\UI-QuestItemNameFrame")
+    r.nameFrame:SetSize(WIDTH - 120, 64)
+    r.nameFrame:SetPoint("LEFT", r.icon, "RIGHT", -10, 0)
 
     r.name = r:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-    r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 8, -3)
-    r.name:SetWidth(WIDTH - 145)
     r.name:SetJustifyH("LEFT")
     r.name:SetWordWrap(false)
 
@@ -419,6 +497,7 @@ local function Row(i)
     r:SetScript("OnLeave", GameTooltip_Hide)
     r:SetScript("OnClick", RowClick)
     rows[i] = r
+    LayoutRow(r, i)
     return r
 end
 
@@ -459,7 +538,7 @@ local tab = "recent"
 local panes = {}
 
 local function RefreshRecent()
-    local n = math.min(#db.history, db.max)
+    local n = math.min(#db.history, cfg.max)
     for i = 1, n do
         local e, r = db.history[i], Row(i)
         r.entry = e
@@ -483,7 +562,7 @@ local function RefreshRecent()
     empty:SetPoint("TOP", 0, -50)
     empty:SetText(L.EMPTY)
     empty:SetShown(n == 0)
-    return math.max(n, 1) * ROW_H + 50
+    return math.max(n, 1) * RowHeight() + 50
 end
 
 -- Stats : deux encadrés (session, total) puis moyenne et meilleur vol.
@@ -658,40 +737,108 @@ Refresh = function()
         if key == tab then b:LockHighlight() else b:UnlockHighlight() end
     end
     UpdateTitle()
-    frame:SetHeight(h + TAB_H)
+    frame:SetHeight(h + (cfg.show.tabs and TAB_H or 0))
+end
+
+-- Éléments affichés et mode compact (profil).
+local function ApplyLayout()
+    local sh = cfg.show
+    portrait:SetShown(sh.logo)
+    for _, t in ipairs({ header, headerL, headerR, title }) do t:SetShown(sh.title) end
+    titleHit:SetShown(sh.title)
+    close:SetShown(sh.close)
+    book:SetShown(sh.book)
+    for _, b in pairs(tabBtns) do b:SetShown(sh.tabs) end
+    for i, r in ipairs(rows) do LayoutRow(r, i) end
+    if frame:IsShown() then Refresh() end
+end
+
+-- Nette au survol : on regarde la souris dix fois par seconde.
+local hoverWatch, hoverAcc = CreateFrame("Frame"), 0
+hoverWatch:SetScript("OnUpdate", function(_, elapsed)
+    if not cfg.hoverFade then
+        if hovered then hovered = false end
+        return
+    end
+    hoverAcc = hoverAcc + elapsed
+    if hoverAcc < 0.1 then return end
+    hoverAcc = 0
+    local over = frame:IsVisible() and frame:IsMouseOver() or false
+    if over ~= hovered then
+        hovered = over
+        ApplyVisibility()
+    end
+end)
+
+-- Fermeture automatique : seulement si la fenêtre s'est ouverte toute seule après un vol.
+local autoOpened, closeToken, previewing = false, 0, false
+ns.steal.AutoOpened = function() autoOpened = true end
+ScheduleAutoClose = function()
+    if not autoOpened or cfg.autoClose <= 0 or not C_Timer then return end
+    closeToken = closeToken + 1
+    local token = closeToken
+    C_Timer.After(cfg.autoClose, function()
+        if token ~= closeToken or not autoOpened or previewing then return end
+        if frame:IsMouseOver() then ScheduleAutoClose() return end  -- on attend que la souris parte
+        autoOpened = false
+        frame:Hide()
+    end)
 end
 
 frame:SetScript("OnShow", Refresh)
 frame:SetScript("OnHide", function()
+    autoOpened = false
     if debug then Print("fenêtre fermée par :\n" .. debugstack(2, 4, 0)) end
 end)
 
 local function Toggle()
+    autoOpened = false
     frame:SetShown(not frame:IsShown())
 end
 
 ---------------------------------------------------------------------------
--- 4. Panneau d'options (Options > Add-ons)
+-- 4. Panneau d'options (Options > Add-ons), dans un cadre qui défile
 ---------------------------------------------------------------------------
+
+local SetProfile, DeleteProfile, ProfileNames, ApplyAll  -- définis avec les profils, plus bas
 
 local panel = CreateFrame("Frame")
 panel.name = "StealHistory"
 
-local ptitle = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-ptitle:SetPoint("TOPLEFT", 16, -16)
+local pscroll = CreateFrame("ScrollFrame", "StealHistoryOptionsScroll", panel, "UIPanelScrollFrameTemplate")
+pscroll:SetPoint("TOPLEFT", 0, -6)
+pscroll:SetPoint("BOTTOMRIGHT", -28, 6)
+local opts = CreateFrame("Frame", nil, pscroll)
+opts:SetSize(620, 1300)
+pscroll:SetScrollChild(opts)
+
+local ptitle = opts:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+ptitle:SetPoint("TOPLEFT", 16, -10)
 ptitle:SetText("StealHistory")
 
-local psub = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+local psub = opts:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 psub:SetPoint("TOPLEFT", ptitle, "BOTTOMLEFT", 0, -8)
 psub:SetText(L.SUBTITLE)
 
 local refreshers = {}
 
+local function Section(anchor, y, text)
+    local h = opts:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    h:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, y)
+    h:SetText(text)
+    local line = opts:CreateTexture(nil, "ARTWORK")
+    line:SetColorTexture(1, 0.82, 0, 0.25)
+    line:SetHeight(1)
+    line:SetPoint("LEFT", h, "RIGHT", 8, 0)
+    line:SetWidth(560 - h:GetStringWidth())
+    return h
+end
+
 local sliderCount = 0
 local function Slider(anchor, x, y, min, max, step, label, key, onChange)
     sliderCount = sliderCount + 1
     local name = "StealHistorySlider" .. sliderCount
-    local s = CreateFrame("Slider", name, panel, "OptionsSliderTemplate")
+    local s = CreateFrame("Slider", name, opts, "OptionsSliderTemplate")
     s:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", x, y)
     s:SetWidth(220)
     s:SetMinMaxValues(min, max)
@@ -703,16 +850,16 @@ local function Slider(anchor, x, y, min, max, step, label, key, onChange)
     s:SetScript("OnValueChanged", function(_, v)
         v = math.floor(v / step + 0.5) * step
         Label(v)
-        if v == db[key] then return end
-        db[key] = v
+        if v == cfg[key] then return end
+        cfg[key] = v
         onChange(v)
     end)
-    refreshers[#refreshers + 1] = function() s:SetValue(db[key]); Label(db[key]) end
+    refreshers[#refreshers + 1] = function() s:SetValue(cfg[key]); Label(cfg[key]) end
     return s
 end
 
 local function CheckBox(anchor, x, y, label, get, set)
-    local cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+    local cb = CreateFrame("CheckButton", nil, opts, "UICheckButtonTemplate")
     cb:SetSize(26, 26)
     cb:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", x, y)
     local text = cb:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
@@ -722,40 +869,150 @@ local function CheckBox(anchor, x, y, label, get, set)
     refreshers[#refreshers + 1] = function() cb:SetChecked(get()) end
     return cb
 end
-local function Option(key) return function() return db[key] end, function(v) db[key] = v end end
+local function Option(key, after)
+    return function() return cfg[key] end,
+           function(v) cfg[key] = v; if after then after() end end
+end
 
-local sCount = Slider(psub, 4, -30, 1, 20, 1,
+local function Button(anchor, point, x, y, w, label, onClick)
+    local b = CreateFrame("Button", nil, opts, "UIPanelButtonTemplate")
+    b:SetSize(w, 24)
+    b:SetPoint("TOPLEFT", anchor, point, x, y)
+    b:SetText(label)
+    b:SetScript("OnClick", onClick)
+    return b
+end
+
+-- Profil -------------------------------------------------------------------
+
+local hProfile = Section(psub, -18, L.PROFILE)
+local profileBtn = CreateFrame("Button", nil, opts, "UIPanelButtonTemplate")
+profileBtn:SetSize(200, 24)
+profileBtn:SetPoint("TOPLEFT", hProfile, "BOTTOMLEFT", 0, -8)
+profileBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+profileBtn:SetScript("OnClick", function(_, button)
+    local names, cur = ProfileNames(), db.profile
+    if #names < 2 then return end
+    for i, n in ipairs(names) do
+        if n == cur then
+            local step = button == "RightButton" and -1 or 1
+            SetProfile(names[(i - 1 + step) % #names + 1])
+            return
+        end
+    end
+    SetProfile(names[1])
+end)
+profileBtn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(L.PROFILE)
+    GameTooltip:AddLine(L.PROFILE_CYCLE, 1, 1, 1, true)
+    GameTooltip:Show()
+end)
+profileBtn:SetScript("OnLeave", GameTooltip_Hide)
+refreshers[#refreshers + 1] = function() profileBtn:SetText(db.profile or "?") end
+
+StaticPopupDialogs.ROGUETIPS_NEW_PROFILE = {
+    text = L.PROFILE_NEW_PROMPT, button1 = ACCEPT, button2 = CANCEL, hasEditBox = true,
+    OnAccept = function(self)
+        local box = self.editBox or self.EditBox
+        local name = box and strtrim(box:GetText() or "") or ""
+        if name ~= "" then
+            if not profiles[name] then profiles[name] = Copy(cfg) end
+            SetProfile(name)
+        end
+    end,
+    EditBoxOnEnterPressed = function(self)
+        local parent = self:GetParent()
+        StaticPopupDialogs.ROGUETIPS_NEW_PROFILE.OnAccept(parent)
+        parent:Hide()
+    end,
+    timeout = 0, whileDead = true, hideOnEscape = true,
+}
+StaticPopupDialogs.ROGUETIPS_DELETE_PROFILE = {
+    text = L.PROFILE_DELETE_CONFIRM, button1 = YES, button2 = NO,
+    OnAccept = function() DeleteProfile(db.profile) end,
+    timeout = 0, whileDead = true, hideOnEscape = true,
+}
+
+local newBtn = Button(profileBtn, "TOPRIGHT", 8, 0, 120, L.PROFILE_NEW,
+    function() StaticPopup_Show("ROGUETIPS_NEW_PROFILE") end)
+local delBtn = Button(newBtn, "TOPRIGHT", 8, 0, 120, L.PROFILE_DELETE, function()
+    if #ProfileNames() < 2 then Print(L.PROFILE_LAST) return end
+    StaticPopup_Show("ROGUETIPS_DELETE_PROFILE", db.profile)
+end)
+local profileHint = opts:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+profileHint:SetPoint("TOPLEFT", profileBtn, "BOTTOMLEFT", 2, -6)
+profileHint:SetText(L.PROFILE_HINT)
+
+-- Général ------------------------------------------------------------------
+
+local hGeneral = Section(profileHint, -20, L.GENERAL)
+local sCount = Slider(hGeneral, 4, -26, 1, 20, 1,
     function(v) return L.KEPT:format(v) end, "max",
     function(v)
         for i = #db.history, v + 1, -1 do db.history[i] = nil end
         Refresh()
     end)
-
-local sAlpha = Slider(sCount, 0, -36, 10, 100, 5,
-    function(v) return L.OPACITY:format(v) end, "alpha",
-    ApplyVisibility)
-
-local cbChat = CheckBox(sAlpha, -4, -30,
-    L.CHAT_OPT:format(L.STOLE:format("x")), Option("replaceChat"))
-local cbShow = CheckBox(cbChat, 0, -4,
-    L.AUTOSHOW, Option("autoShow"))
+local cbChat = CheckBox(sCount, -4, -26, L.CHAT_OPT:format(L.STOLE:format("x")), Option("replaceChat"))
+local cbShow = CheckBox(cbChat, 0, -4, L.AUTOSHOW, Option("autoShow"))
+local sClose = Slider(cbShow, 32, -22, 0, 30, 1,
+    function(v) return v == 0 and L.AUTOCLOSE_OFF or L.AUTOCLOSE:format(v) end, "autoClose",
+    function() end)
 local SetMinimapShown  -- défini avec le bouton de la minimap
-local cbMinimap = CheckBox(cbShow, 0, -4,
-    L.MINIMAP,
-    function() return not db.minimap.hide end,
+local cbMinimap = CheckBox(sClose, -32, -24, L.MINIMAP,
+    function() return not cfg.minimap.hide end,
     function(v) SetMinimapShown(v) end)
 
--- Visibilité : trois cases qui se comportent comme des boutons radio.
-local visTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-visTitle:SetPoint("TOPLEFT", cbMinimap, "BOTTOMLEFT", 4, -16)
-visTitle:SetText(L.VISIBILITY)
+-- Apparence ----------------------------------------------------------------
 
--- « Tout le temps » / « Hors combat » s'excluent ; sous « Tout le temps »,
+local hLook = Section(cbMinimap, -20, L.APPEARANCE)
+local sScale = Slider(hLook, 4, -26, 70, 150, 5,
+    function(v) return L.SCALE:format(v) end, "scale", ApplyVisibility)
+local sAlpha = Slider(sScale, 0, -36, 10, 100, 5,
+    function(v) return L.OPACITY:format(v) end, "alpha", ApplyVisibility)
+local sBg = Slider(sAlpha, 0, -36, 0, 100, 5,
+    function(v) return L.BG_OPACITY:format(v) end, "bgAlpha", ApplyVisibility)
+local cbCompact = CheckBox(sBg, -4, -26, L.COMPACT, Option("compact", ApplyLayout))
+local cbLock = CheckBox(cbCompact, 0, -4, L.LOCK, Option("locked"))
+local hoverWidgets = {}
+local function UpdateHoverOptions()
+    for _, w in ipairs(hoverWidgets) do
+        w:SetAlpha(cfg.hoverFade and 1 or 0.4)
+        w:EnableMouse(cfg.hoverFade)
+    end
+end
+local cbHover = CheckBox(cbLock, 0, -4, L.HOVER, Option("hoverFade", function()
+    UpdateHoverOptions()
+    ApplyVisibility()
+end))
+local sHover = Slider(cbHover, 32, -22, 0, 100, 5,
+    function(v) return L.HOVER_ALPHA:format(v) end, "hoverAlpha", ApplyVisibility)
+hoverWidgets = { sHover }
+refreshers[#refreshers + 1] = UpdateHoverOptions
+
+local hShow = opts:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+hShow:SetPoint("TOPLEFT", sHover, "BOTTOMLEFT", -32, -26)
+hShow:SetText(L.ELEMENTS)
+local ELEMENTS = { "logo", "title", "amount", "time", "target", "nameFrame", "tabs", "book", "close" }
+local lastShow
+for i, key in ipairs(ELEMENTS) do
+    local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
+    local cb = CheckBox(hShow, col * 190 - 4, -4 - row * 26, L["SHOW_" .. key:upper()],
+        function() return cfg.show[key] end,
+        function(v) cfg.show[key] = v; ApplyLayout() end)
+    if col == 0 then lastShow = cb end
+end
+
+-- Visibilité : « Tout le temps » / « Hors combat » s'excluent ; sous « Tout le temps »,
 -- la réduction en combat et ses deux réglages (grisés sinon).
+local visTitle = Section(lastShow, -20, L.VISIBILITY)
+visTitle:ClearAllPoints()
+visTitle:SetPoint("TOPLEFT", lastShow, "BOTTOMLEFT", 4, -20)
+
 local visBoxes, reduceWidgets = {}, {}
 local function UpdateVisibilityOptions()
-    for _, b in ipairs(visBoxes) do b:SetChecked(b.mode == db.visibility) end
-    local on = db.visibility == "always"
+    for _, b in ipairs(visBoxes) do b:SetChecked(b.mode == cfg.visibility) end
+    local on = cfg.visibility == "always"
     for _, w in ipairs(reduceWidgets) do
         w:SetAlpha(on and 1 or 0.4)
         w:EnableMouse(on)
@@ -763,9 +1020,9 @@ local function UpdateVisibilityOptions()
 end
 local function VisBox(anchor, x, y, mode, label)
     local cb = CheckBox(anchor, x, y, label,
-        function() return db.visibility == mode end,
+        function() return cfg.visibility == mode end,
         function()
-            db.visibility = mode
+            cfg.visibility = mode
             UpdateVisibilityOptions()
             ApplyVisibility()
         end)
@@ -774,31 +1031,23 @@ local function VisBox(anchor, x, y, mode, label)
     return cb
 end
 
-local cbAlways = VisBox(visTitle, -4, -4, "always", L.VIS_ALWAYS)
+local cbAlways = VisBox(visTitle, -4, -6, "always", L.VIS_ALWAYS)
 local cbReduce = CheckBox(cbAlways, 24, -2, L.VIS_FADE,
-    function() return db.combatReduce end,
-    function(v) db.combatReduce = v; ApplyVisibility() end)
+    function() return cfg.combatReduce end,
+    function(v) cfg.combatReduce = v; ApplyVisibility() end)
 local sCombat = Slider(cbReduce, 8, -24, 0, 100, 5,
-    function(v) return L.COMBAT_OPACITY:format(v) end, "combatAlpha",
-    ApplyVisibility)
-local sScale = Slider(sCombat, 0, -36, 50, 100, 5,
-    function(v) return L.COMBAT_SIZE:format(v) end, "combatScale",
-    ApplyVisibility)
-reduceWidgets = { cbReduce, sCombat, sScale }
-local cbNoCombat = VisBox(sScale, -32, -24, "nocombat", L.VIS_NOCOMBAT)
+    function(v) return L.COMBAT_OPACITY:format(v) end, "combatAlpha", ApplyVisibility)
+local sCScale = Slider(sCombat, 0, -36, 50, 100, 5,
+    function(v) return L.COMBAT_SIZE:format(v) end, "combatScale", ApplyVisibility)
+reduceWidgets = { cbReduce, sCombat, sCScale }
+local cbNoCombat = VisBox(sCScale, -32, -24, "nocombat", L.VIS_NOCOMBAT)
 refreshers[#refreshers + 1] = UpdateVisibilityOptions
 
-local clear = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-clear:SetSize(180, 24)
-clear:SetPoint("TOPLEFT", cbNoCombat, "BOTTOMLEFT", 4, -20)
-clear:SetText(L.CLEAR)
-clear:SetScript("OnClick", function() wipe(db.history); Refresh() end)
+-- Boutons ------------------------------------------------------------------
 
-local show = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-show:SetSize(180, 24)
-show:SetPoint("LEFT", clear, "RIGHT", 10, 0)
-show:SetText(L.SHOW)
-show:SetScript("OnClick", Toggle)
+local clear = Button(cbNoCombat, "BOTTOMLEFT", 4, -24, 180, L.CLEAR,
+    function() wipe(db.history); Refresh() end)
+local show = Button(clear, "TOPRIGHT", 10, 0, 180, L.SHOW, Toggle)
 
 local function ResetStats()
     db.total = 0
@@ -812,20 +1061,24 @@ StaticPopupDialogs.ROGUETIPS_RESET_STATS = {
     text = L.RESET_CONFIRM, button1 = YES, button2 = NO,
     OnAccept = ResetStats, timeout = 0, whileDead = true, hideOnEscape = true,
 }
+local journalBtn = Button(clear, "BOTTOMLEFT", 0, -8, 180, L.OPEN_JOURNAL,
+    function() if ns.steal.ToggleJournal then ns.steal.ToggleJournal() end end)
+Button(journalBtn, "TOPRIGHT", 10, 0, 180, L.RESET_STATS,
+    function() StaticPopup_Show("ROGUETIPS_RESET_STATS") end)
 
-local journalBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-journalBtn:SetSize(180, 24)
-journalBtn:SetPoint("TOPLEFT", clear, "BOTTOMLEFT", 0, -8)
-journalBtn:SetText(L.OPEN_JOURNAL)
-journalBtn:SetScript("OnClick", function() if ns.steal.ToggleJournal then ns.steal.ToggleJournal() end end)
-
-local resetBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-resetBtn:SetSize(180, 24)
-resetBtn:SetPoint("LEFT", journalBtn, "RIGHT", 10, 0)
-resetBtn:SetText(L.RESET_STATS)
-resetBtn:SetScript("OnClick", function() StaticPopup_Show("ROGUETIPS_RESET_STATS") end)
-
-panel:SetScript("OnShow", function() for _, f in ipairs(refreshers) do f() end end)
+-- Aperçu en direct : la fenêtre reste affichée tant que les options sont ouvertes.
+local shownBeforePreview = false
+panel:SetScript("OnShow", function()
+    for _, f in ipairs(refreshers) do f() end
+    shownBeforePreview = frame:IsShown()
+    previewing = true
+    autoOpened = false
+    frame:Show()
+end)
+panel:SetScript("OnHide", function()
+    previewing = false
+    if not shownBeforePreview then frame:Hide() end
+end)
 
 -- Sous-catégorie de RogueTips (Options > AddOns > RogueTips > StealHistory).
 -- RogueTips.lua est chargé avant et range sa catégorie dans ns.category.
@@ -877,14 +1130,14 @@ mmBorder:SetSize(53, 53)
 mmBorder:SetPoint("TOPLEFT")
 
 local function PlaceMinimapButton()
-    local a = math.rad(db.minimap.angle)
+    local a = math.rad(cfg.minimap.angle)
     local r = Minimap:GetWidth() / 2 + 5
     mm:ClearAllPoints()
     mm:SetPoint("CENTER", Minimap, "CENTER", math.cos(a) * r, math.sin(a) * r)
 end
 
 SetMinimapShown = function(shown)
-    db.minimap.hide = not shown
+    cfg.minimap.hide = not shown
     mm:SetShown(shown)
 end
 
@@ -899,7 +1152,7 @@ mm:SetScript("OnDragStart", function(self)
         local mx, my = Minimap:GetCenter()
         local px, py = GetCursorPosition()
         local scale = Minimap:GetEffectiveScale()
-        db.minimap.angle = math.deg(math.atan2(py / scale - my, px / scale - mx))
+        cfg.minimap.angle = math.deg(math.atan2(py / scale - my, px / scale - mx))
         PlaceMinimapButton()
     end)
 end)
@@ -914,6 +1167,43 @@ mm:SetScript("OnEnter", function(self)
     GameTooltip:Show()
 end)
 mm:SetScript("OnLeave", GameTooltip_Hide)
+
+---------------------------------------------------------------------------
+-- 6. Profils partagés entre personnages
+---------------------------------------------------------------------------
+
+ApplyAll = function()
+    ApplyLayout()
+    ApplyVisibility()
+    PlaceMinimapButton()
+    mm:SetShown(not cfg.minimap.hide)
+    for i = #db.history, cfg.max + 1, -1 do db.history[i] = nil end
+    if frame:IsShown() then Refresh() end
+    if panel:IsVisible() then for _, f in ipairs(refreshers) do f() end end
+end
+
+ProfileNames = function()
+    local list = {}
+    for name in pairs(profiles) do list[#list + 1] = name end
+    table.sort(list)
+    return list
+end
+
+SetProfile = function(name)
+    if not profiles[name] then profiles[name] = Copy(PROFILE_DEFAULTS) end
+    cfg = Fill(profiles[name], PROFILE_DEFAULTS)
+    db.profile = name
+    ApplyAll()
+    Print(L.PROFILE_ACTIVE:format(name))
+end
+
+DeleteProfile = function(name)
+    local names = ProfileNames()
+    if #names < 2 then return end
+    profiles[name] = nil
+    local nextName = names[1] == name and names[2] or names[1]
+    SetProfile(nextName)
+end
 
 -- Pour StealJournal.lua.
 ns.steal.DB = function() return db end
@@ -955,12 +1245,23 @@ ev:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= ADDON then return end
         StealHistoryDB = StealHistoryDB or {}
-        for k, v in pairs(DEFAULTS) do
-            if StealHistoryDB[k] == nil then StealHistoryDB[k] = v end
-        end
         db = StealHistoryDB
-        if db.visibility == "fade" then  -- ancien 3e mode -> case à part
-            db.visibility, db.combatReduce = "always", true
+        db.history = db.history or {}
+        RogueTipsDB = RogueTipsDB or {}
+        RogueTipsDB.stealProfiles = RogueTipsDB.stealProfiles or {}
+        profiles = RogueTipsDB.stealProfiles
+        local name = db.profile or L.DEFAULT_PROFILE
+        if not profiles[name] then
+            -- 1re fois : les anciens réglages de ce personnage deviennent le profil.
+            local p = {}
+            for _, k in ipairs(PROFILE_KEYS) do if db[k] ~= nil then p[k] = db[k] end end
+            profiles[name] = p
+        end
+        for _, k in ipairs(PROFILE_KEYS) do db[k] = nil end
+        cfg = Fill(profiles[name], PROFILE_DEFAULTS)
+        db.profile = name
+        if cfg.visibility == "fade" then  -- ancien 3e mode -> case à part
+            cfg.visibility, cfg.combatReduce = "always", true
         end
         if not db.total then  -- première fois : total des pièces déjà dans l'historique
             db.total = 0
@@ -968,9 +1269,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
         end
         db.stats = db.stats or { all = NewBucket(), sessions = {}, archives = {} }
         RegisterPanel()
-        PlaceMinimapButton()
-        mm:SetShown(not db.minimap.hide)
-        ApplyVisibility()
+        ApplyAll()
     elseif event == "UNIT_SPELLCAST_SENT" then
         local _, target, _, spellID = ...
         if spellID == PICK_POCKET then
@@ -1017,9 +1316,9 @@ SlashCmdList.STEALHISTORY = function(msg)
         debug = not debug
         Print("debug " .. (debug and "on" or "off"))
     elseif msg == "minimap" then
-        SetMinimapShown(db.minimap.hide)
+        SetMinimapShown(cfg.minimap.hide)
     elseif msg == "reset" then
-        db.pos = nil
+        cfg.pos = nil
         Place()
     else
         Toggle()
