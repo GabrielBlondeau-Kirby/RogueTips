@@ -13,3 +13,4 @@ Locales.lua
 StealHistory.lua
 StealJournal.lua
 DamageText.lua
+Init.lua

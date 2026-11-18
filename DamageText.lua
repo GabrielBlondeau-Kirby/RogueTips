@@ -5,8 +5,11 @@
 -- /rtdmg : active / coupe ; /rtdmg options : ouvre les réglages.
 
 local ADDON, ns = ...
+ns.modules = ns.modules or {}  -- exécutés par Init.lua, une fois la langue choisie connue
+ns.onLoad = ns.onLoad or {}
+ns.modules[#ns.modules + 1] = function()
 
-local FR = GetLocale() == "frFR"
+local FR = ns.lang == "frFR"  -- langue choisie dans les options
 local function T(fr, en) return FR and fr or en end
 local function Print(msg) print("|cff33ff99RogueTips|r " .. msg) end
 local function Secret(v) return issecretvalue and issecretvalue(v) end
@@ -529,13 +532,15 @@ end
 
 -- Démarrage --------------------------------------------------------------------
 
+local didLoad = false
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:SetScript("OnEvent", function(self, event, ...)
     if event == "UNIT_COMBAT" then
         OnUnitCombat(...)
     elseif event == "ADDON_LOADED" then
-        if ... ~= ADDON then return end
+        if ... ~= ADDON or didLoad then return end
+        didLoad = true
         RogueTipsDB = RogueTipsDB or {}
         RogueTipsDB.dmg = RogueTipsDB.dmg or { enabled = true, hideBlizzard = true }
         db = RogueTipsDB.dmg
@@ -565,4 +570,8 @@ SlashCmdList.RTDMG = function(msg)
     db.enabled = not db.enabled
     ApplyEnabled()
     Print(T("chiffres de dégâts : ", "damage numbers: ") .. (db.enabled and T("activés", "on") or T("coupés", "off")))
+end
+
+-- Les SavedVariables sont chargées : Init.lua rejoue ADDON_LOADED pour ce module.
+ns.onLoad[#ns.onLoad + 1] = function() ev:GetScript("OnEvent")(ev, "ADDON_LOADED", ADDON) end
 end

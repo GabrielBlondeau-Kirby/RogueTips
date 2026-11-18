@@ -3,6 +3,9 @@
 --  2. Clic droit sur un coffre verrouillé du sac = Crochetage dessus.
 
 local ADDON, ns = ...
+ns.modules = ns.modules or {}  -- exécutés par Init.lua, une fois la langue choisie connue
+ns.onLoad = ns.onLoad or {}
+ns.modules[#ns.modules + 1] = function()
 local _, class = UnitClass("player")
 if class ~= "ROGUE" then return end
 
@@ -40,6 +43,9 @@ end
 local function Print(msg)
     print("|cff33ff99RogueTips|r : " .. msg)
 end
+
+local FR = ns.lang == "frFR"  -- langue choisie dans les options
+local function T(fr, en) return FR and fr or en end
 
 ---------------------------------------------------------------------------
 -- 1. Macros
@@ -127,7 +133,7 @@ end
 -- overwrite = true : réécrit aussi les macros existantes (commande /roguetips macros).
 local function SetupMacros(overwrite)
     if InCombatLockdown() then
-        Print("en combat, macros créées à la sortie du combat.")
+        Print(T("en combat, macros créées à la sortie du combat.", "in combat, macros will be created after combat."))
         return false
     end
     local list = BuildMacros()
@@ -141,9 +147,9 @@ local function SetupMacros(overwrite)
         elseif r == "full" then full = true end
     end
 
-    if created > 0 then Print(created .. " macro(s) créée(s) (onglet macros du personnage).") end
-    if updated > 0 then Print(updated .. " macro(s) mise(s) à jour.") end
-    if full then Print("plus de place dans les macros du personnage, certaines n'ont pas été créées.") end
+    if created > 0 then Print(created .. T(" macro(s) créée(s) (onglet macros du personnage).", " macro(s) created (character macros tab).")) end
+    if updated > 0 then Print(updated .. T(" macro(s) mise(s) à jour.", " macro(s) updated.")) end
+    if full then Print(T("plus de place dans les macros du personnage, certaines n'ont pas été créées.", "no room left in character macros, some were not created.")) end
     return true
 end
 
@@ -236,8 +242,6 @@ hooksecurefunc(GameTooltip, "SetBagItem", OnSetBagItem)
 -- 3. Panneau d'options (Options > Add-ons)
 ---------------------------------------------------------------------------
 
-local FR = GetLocale() == "frFR"
-local function T(fr, en) return FR and fr or en end
 
 local panel = CreateFrame("Frame")
 panel.name = "RogueTips"
@@ -306,7 +310,7 @@ pvTitle:SetText(T("Aperçu des macros", "Macro preview"))
 
 local box = CreateFrame("Frame", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
 box:SetPoint("TOPLEFT", pvTitle, "BOTTOMLEFT", 0, -8)
-box:SetSize(610, 250)
+box:SetSize(610, 230)
 if box.SetBackdrop then
     box:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
@@ -421,6 +425,45 @@ end
 
 rebuild:SetScript("OnClick", function() SetupMacros(true); RefreshPreview() end)
 
+-- Langue de l'addon : celle du jeu, anglais ou français. Prise en compte au rechargement
+-- (les textes sont posés à la construction des fenêtres).
+StaticPopupDialogs.ROGUETIPS_RELOAD = {
+    text = T("La nouvelle langue s'applique après un rechargement de l'interface. Recharger maintenant ?",
+             "The new language applies after a UI reload. Reload now?"),
+    button1 = T("Recharger", "Reload"), button2 = T("Plus tard", "Later"),
+    OnAccept = function() ReloadUI() end,
+    timeout = 0, whileDead = true, hideOnEscape = true,
+}
+
+local langTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+langTitle:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -18)
+langTitle:SetText(T("Langue de l'addon", "Addon language"))
+
+local LANGS = { { "auto", T("Langue du jeu", "Game language") }, { "enUS", "English" }, { "frFR", "Français" } }
+local langBoxes = {}
+for i, l in ipairs(LANGS) do
+    local cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+    cb:SetSize(26, 26)
+    cb:SetPoint("TOPLEFT", langTitle, "BOTTOMLEFT", -4 + (i - 1) * 170, -4)
+    local text = cb:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    text:SetPoint("LEFT", cb, "RIGHT", 4, 1)
+    text:SetText(l[2])
+    cb:SetScript("OnClick", function()
+        local before = db.lang or "auto"
+        db.lang = l[1]
+        for _, b in ipairs(langBoxes) do b:SetChecked(b.code == db.lang) end
+        if l[1] ~= before then StaticPopup_Show("ROGUETIPS_RELOAD") end
+    end)
+    cb.code = l[1]
+    cb.Refresh = function(self) self:SetChecked(self.code == (db.lang or "auto")) end
+    langBoxes[i] = cb
+    checkboxes[#checkboxes + 1] = cb
+end
+local langNote = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+langNote:SetPoint("TOPLEFT", langTitle, "BOTTOMLEFT", 0, -34)
+langNote:SetText(T("Les noms de sorts des macros restent ceux du jeu.",
+                   "Spell names in macros stay in the game's language."))
+
 panel:SetScript("OnShow", function()
     for _, cb in ipairs(checkboxes) do cb:Refresh() end
     RefreshPreview()
@@ -452,13 +495,15 @@ end
 
 local pendingMacros = true
 local ev = CreateFrame("Frame")
+local didLoad = false
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")
 ev:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
-        if arg1 ~= ADDON then return end
+        if arg1 ~= ADDON or didLoad then return end
+        didLoad = true
         RogueTipsDB = RogueTipsDB or {}
         for k, v in pairs(DEFAULTS) do
             if RogueTipsDB[k] == nil then RogueTipsDB[k] = v end
@@ -486,8 +531,12 @@ SlashCmdList.ROGUETIPS = function(msg)
         SetupMacros(true)
     elseif msg == "debug" then
         debug = not debug
-        Print("debug " .. (debug and "activé" or "désactivé") .. ".")
+        Print("debug " .. (debug and T("activé", "on") or T("désactivé", "off")) .. ".")
     else
         OpenPanel()
     end
+end
+
+-- Les SavedVariables sont chargées : Init.lua rejoue ADDON_LOADED pour ce module.
+ns.onLoad[#ns.onLoad + 1] = function() ev:GetScript("OnEvent")(ev, "ADDON_LOADED", ADDON) end
 end

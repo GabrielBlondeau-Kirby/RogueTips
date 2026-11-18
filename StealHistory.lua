@@ -4,6 +4,9 @@
 --  3. Fenêtre façon cadre de butin avec les N derniers vols (5 par défaut).
 
 local ADDON, ns = ...
+ns.modules = ns.modules or {}  -- exécutés par Init.lua, une fois la langue choisie connue
+ns.onLoad = ns.onLoad or {}
+ns.modules[#ns.modules + 1] = function()
 local L = ns.L
 local _, class = UnitClass("player")
 if class ~= "ROGUE" then return end
@@ -1249,6 +1252,7 @@ ns.steal.Backdrop, ns.steal.Refresh = BACKDROP_TEMPLATE, function() if frame:IsS
 ---------------------------------------------------------------------------
 
 local ev = CreateFrame("Frame")
+local didLoad = false
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 ev:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
@@ -1276,7 +1280,8 @@ ev:SetScript("OnEvent", function(_, event, ...)
         return
     end
     if event == "ADDON_LOADED" then
-        if ... ~= ADDON then return end
+        if ... ~= ADDON or didLoad then return end
+        didLoad = true
         StealHistoryDB = StealHistoryDB or {}
         db = StealHistoryDB
         db.history = db.history or {}
@@ -1356,4 +1361,8 @@ SlashCmdList.STEALHISTORY = function(msg)
     else
         Toggle()
     end
+end
+
+-- Les SavedVariables sont chargées : Init.lua rejoue ADDON_LOADED pour ce module.
+ns.onLoad[#ns.onLoad + 1] = function() ev:GetScript("OnEvent")(ev, "ADDON_LOADED", ADDON) end
 end
