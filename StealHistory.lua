@@ -26,9 +26,9 @@ local PROFILE_DEFAULTS = {
     minimap = { angle = 200, hide = false },
     scale = 100, bgAlpha = 100, locked = false, compact = false,
     hoverFade = false, hoverAlpha = 25, autoClose = 0,
-    titleOpaque = true, titleX = 0, titleY = 0,
+    titleX = 0, titleY = 0,
     show = { logo = true, title = true, amount = true, time = true, target = true,
-             nameFrame = true, tabs = true, book = true, close = true },
+             nameFrame = true, tabs = true, book = true, compactBtn = true, close = true },
 }
 local PROFILE_KEYS = { "max", "replaceChat", "autoShow", "alpha", "visibility", "combatReduce",
     "combatAlpha", "combatScale", "minimap", "pos" }  -- anciens réglages par personnage
@@ -77,6 +77,7 @@ local castAt, castTarget = 0, nil
 local stealing = false     -- fenêtre de butin du vol ouverte
 local windowEnd = 0        -- fin de la période où les messages du chat sont « volés »
 local moneyBefore = 0      -- argent au moment du sort
+local HISTORY_KEEP = 20  -- maximum du curseur « Vols gardés »
 local lastCast, countedCast = 0, nil  -- un vol = un sort, même s'il donne pièces + objet
 local stealMoney = 0       -- pièces du vol en cours (pour le meilleur vol)
 
@@ -183,7 +184,7 @@ local function Add(entry)
     entry.target = castTarget
     entry.time = time()
     table.insert(db.history, 1, entry)
-    for i = #db.history, cfg.max + 1, -1 do db.history[i] = nil end
+    for i = #db.history, HISTORY_KEEP + 1, -1 do db.history[i] = nil end  -- on n'en affiche que cfg.max
     if entry.money then db.total = (db.total or 0) + entry.money end
     Record(entry)
     if ns.steal.OnSteal then ns.steal.OnSteal() end
@@ -315,10 +316,9 @@ local function ApplyVisibility()
     holder:SetAlpha(a)
     frame:SetScale(cfg.scale / 100 * (reduced and cfg.combatScale / 100 or 1))
     if frame.SetBackdropColor then frame:SetBackdropColor(1, 1, 1, cfg.bgAlpha / 100) end
-    -- Cadre du titre : opaque si l'option est cochée, sinon suit la fenêtre
-    -- (sauf réduction en combat ou estompage, où il s'estompe avec elle).
+    -- Le cadre du titre reste opaque, comme celui du journal (sauf réduction en combat ou survol).
     if ns.steal.headerFrame and ns.steal.headerFrame.SetIgnoreParentAlpha then
-        ns.steal.headerFrame:SetIgnoreParentAlpha(cfg.titleOpaque or (not reduced and not faded))
+        ns.steal.headerFrame:SetIgnoreParentAlpha(not reduced and not faded)
     end
     Place()
 end
@@ -724,6 +724,27 @@ book:SetScript("OnEnter", function(self)
 end)
 book:SetScript("OnLeave", GameTooltip_Hide)
 
+-- Parchemin à côté du livre : passe en mode compact et en revient (coloré = compact).
+local ApplyLayout
+local compactBtn = CreateFrame("Button", nil, frame)
+compactBtn:SetSize(20, 20)
+compactBtn:SetPoint("RIGHT", book, "LEFT", -2, 0)
+compactBtn:SetNormalTexture("Interface\\Icons\\INV_Scroll_03")
+compactBtn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+compactBtn:SetScript("OnClick", function(self)
+    cfg.compact = not cfg.compact
+    ApplyLayout()
+    if ns.steal.RefreshOptions then ns.steal.RefreshOptions() end
+    self:GetScript("OnEnter")(self)
+end)
+compactBtn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(L.COMPACT_BTN)
+    GameTooltip:AddLine(cfg.compact and L.COMPACT_ON or L.COMPACT_OFF, 1, 1, 1)
+    GameTooltip:Show()
+end)
+compactBtn:SetScript("OnLeave", GameTooltip_Hide)
+
 Refresh = function()
     if tab ~= "recent" then
         for i = 1, #rows do rows[i]:Hide() end
@@ -743,7 +764,7 @@ Refresh = function()
 end
 
 -- Éléments affichés et mode compact (profil).
-local function ApplyLayout()
+ApplyLayout = function()
     local sh = cfg.show
     header:ClearAllPoints()
     header:SetPoint("TOP", 12 + cfg.titleX, 12 + cfg.titleY)
@@ -752,6 +773,9 @@ local function ApplyLayout()
     titleHit:SetShown(sh.title)
     close:SetShown(sh.close)
     book:SetShown(sh.book)
+    compactBtn:SetShown(sh.compactBtn)
+    local tex = compactBtn:GetNormalTexture()
+    if tex and tex.SetDesaturated then tex:SetDesaturated(not cfg.compact) end
     for _, b in pairs(tabBtns) do b:SetShown(sh.tabs) end
     for i, r in ipairs(rows) do LayoutRow(r, i) end
     if frame:IsShown() then Refresh() end
@@ -954,7 +978,6 @@ local hGeneral = Section(profileHint, -20, L.GENERAL)
 local sCount = Slider(hGeneral, 4, -26, 1, 20, 1,
     function(v) return L.KEPT:format(v) end, "max",
     function(v)
-        for i = #db.history, v + 1, -1 do db.history[i] = nil end
         Refresh()
     end)
 local cbChat = CheckBox(sCount, -4, -26, L.CHAT_OPT:format(L.STOLE:format("x")), Option("replaceChat"))
@@ -976,8 +999,7 @@ local sAlpha = Slider(sScale, 0, -36, 10, 100, 5,
     function(v) return L.OPACITY:format(v) end, "alpha", ApplyVisibility)
 local sBg = Slider(sAlpha, 0, -36, 0, 100, 5,
     function(v) return L.BG_OPACITY:format(v) end, "bgAlpha", ApplyVisibility)
-local cbTitleOpaque = CheckBox(sBg, -4, -26, L.TITLE_OPAQUE, Option("titleOpaque", ApplyVisibility))
-local sTitleX = Slider(cbTitleOpaque, 4, -22, -80, 80, 1,
+local sTitleX = Slider(sBg, 0, -36, -80, 80, 1,
     function(v) return L.TITLE_X:format(v) end, "titleX", ApplyLayout)
 local sTitleY = Slider(sTitleX, 0, -36, -20, 30, 1,
     function(v) return L.TITLE_Y:format(v) end, "titleY", ApplyLayout)
@@ -1002,7 +1024,7 @@ refreshers[#refreshers + 1] = UpdateHoverOptions
 local hShow = opts:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 hShow:SetPoint("TOPLEFT", sHover, "BOTTOMLEFT", -32, -26)
 hShow:SetText(L.ELEMENTS)
-local ELEMENTS = { "logo", "title", "amount", "time", "target", "nameFrame", "tabs", "book", "close" }
+local ELEMENTS = { "logo", "title", "amount", "time", "target", "nameFrame", "tabs", "book", "compactBtn", "close" }
 local lastShow
 for i, key in ipairs(ELEMENTS) do
     local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
@@ -1074,6 +1096,10 @@ local journalBtn = Button(clear, "BOTTOMLEFT", 0, -8, 180, L.OPEN_JOURNAL,
     function() if ns.steal.ToggleJournal then ns.steal.ToggleJournal() end end)
 Button(journalBtn, "TOPRIGHT", 10, 0, 180, L.RESET_STATS,
     function() StaticPopup_Show("ROGUETIPS_RESET_STATS") end)
+
+ns.steal.RefreshOptions = function()
+    if panel:IsVisible() then for _, f in ipairs(refreshers) do f() end end
+end
 
 -- Aperçu en direct : la fenêtre reste affichée tant que les options sont ouvertes.
 local shownBeforePreview = false
@@ -1186,7 +1212,6 @@ ApplyAll = function()
     ApplyVisibility()
     PlaceMinimapButton()
     mm:SetShown(not cfg.minimap.hide)
-    for i = #db.history, cfg.max + 1, -1 do db.history[i] = nil end
     if frame:IsShown() then Refresh() end
     if panel:IsVisible() then for _, f in ipairs(refreshers) do f() end end
 end
