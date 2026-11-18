@@ -13,6 +13,7 @@ local SPELL = {
     CHEAP    = 1833,
     SINISTER = 1752,
     SAP      = 6770,
+    BLIND    = 2094,  -- Cécité
     PICK     = 921,   -- Vol à la tire
     STEALTH  = 1784,  -- Camouflage
     LOCKPICK = 1804,  -- Crochetage
@@ -67,31 +68,60 @@ local function BuildMacros()
             .. "/cast " .. spell .. "\n"
             .. "/cast [nostealth] " .. n.STEALTH
     end
-
-    return {
-        { name = n.AMBUSH,   body = opener(n.AMBUSH) },
-        { name = n.GARROTE,  body = opener(n.GARROTE) },
-        { name = n.CHEAP,    body = opener(n.CHEAP) },
-        { name = n.SINISTER, body = opener(n.SINISTER) },
-        { name = n.SAP, body = "#showtooltip " .. n.SAP .. "\n"
+    -- Vol à la tire puis le sort sur l'ennemi survolé (sinon la cible), comme Assommer.
+    local function onMouseover(spell)
+        return "#showtooltip " .. spell .. "\n"
             .. "/cleartarget [dead][help]\n"
             .. "/targetenemy [noexists]\n"
             .. "/cast " .. n.PICK .. "\n"
-            .. "/cast [@mouseover,harm,exists,nodead] " .. n.SAP .. "; " .. n.SAP .. "\n"
-            .. "/cast [nostealth] " .. n.STEALTH },
-        { name = n.PICK, body = "#showtooltip\n"
+            .. "/cast [@mouseover,harm,exists,nodead] " .. spell .. "; " .. spell .. "\n"
+            .. "/cast [nostealth] " .. n.STEALTH
+    end
+
+    return {
+        { name = n.AMBUSH,   spell = SPELL.AMBUSH,   body = opener(n.AMBUSH) },
+        { name = n.GARROTE,  spell = SPELL.GARROTE,  body = opener(n.GARROTE) },
+        { name = n.CHEAP,    spell = SPELL.CHEAP,    body = opener(n.CHEAP) },
+        { name = n.SINISTER, spell = SPELL.SINISTER, body = opener(n.SINISTER) },
+        { name = n.SAP,      spell = SPELL.SAP,      body = onMouseover(n.SAP) },
+        { name = n.BLIND,    spell = SPELL.BLIND,    body = onMouseover(n.BLIND) },
+        { name = n.PICK, spell = SPELL.PICK, body = "#showtooltip\n"
             .. "/cleartarget [dead][help]\n"
             .. "/targetenemy [noexists]\n"
             .. "/cast [@mouseover,harm,exists,nodead] " .. n.PICK .. "; " .. n.PICK .. "\n"
             .. "/cast [nostealth] " .. n.STEALTH },
         -- Tir à distance : choisit le bon sort selon l'arme équipée.
         { name = GetLocale() == "frFR" and "Tir à distance" or "Ranged",
-          icon = "Ability_Marksmanship",
+          icon = "Ability_Marksmanship", iconPath = "Interface\\Icons\\Ability_Marksmanship",
           body = "/cast [equipped:" .. WeaponType("BOW") .. "] " .. n.BOW
             .. "; [equipped:" .. WeaponType("GUN") .. "] " .. n.GUN
             .. "; [equipped:" .. WeaponType("CROSSBOW") .. "] " .. n.CROSSBOW
             .. "; [equipped:" .. WeaponType("THROWN") .. "] " .. n.THROW },
     }
+end
+
+-- Crée la macro si elle manque ; la réécrit si overwrite. Renvoie ce qui a été fait.
+local function WriteMacro(m, overwrite)
+    local name = MacroName(m.name)
+    local index = GetMacroIndexByName(name)
+    if index == 0 then
+        local _, numChar = GetNumMacros()
+        if numChar >= (MAX_CHARACTER_MACROS or 18) then return "full" end
+        -- Icône « ? » : #showtooltip affiche alors l'icône du sort.
+        CreateMacro(name, m.icon or "INV_MISC_QUESTIONMARK", m.body, true)
+        return "created"
+    elseif overwrite then
+        EditMacro(index, name, m.icon or "INV_MISC_QUESTIONMARK", m.body)
+        return "updated"
+    end
+end
+
+-- État d'une macro dans l'onglet du personnage : absente, à jour ou modifiée.
+local function MacroState(m)
+    local index = GetMacroIndexByName(MacroName(m.name))
+    if index == 0 then return "missing" end
+    local body = GetMacroBody(index) or ""
+    return strtrim(body) == strtrim(m.body) and "ok" or "edited"
 end
 
 -- overwrite = true : réécrit aussi les macros existantes (commande /roguetips macros).
@@ -105,21 +135,10 @@ local function SetupMacros(overwrite)
 
     local created, updated, full = 0, 0, false
     for _, m in ipairs(list) do
-        local name = MacroName(m.name)
-        local index = GetMacroIndexByName(name)
-        if index == 0 then
-            local _, numChar = GetNumMacros()
-            if numChar >= (MAX_CHARACTER_MACROS or 18) then
-                full = true
-            else
-                -- Icône « ? » : #showtooltip affiche alors l'icône du sort.
-                CreateMacro(name, m.icon or "INV_MISC_QUESTIONMARK", m.body, true)
-                created = created + 1
-            end
-        elseif overwrite then
-            EditMacro(index, name, m.icon or "INV_MISC_QUESTIONMARK", m.body)
-            updated = updated + 1
-        end
+        local r = WriteMacro(m, overwrite)
+        if r == "created" then created = created + 1
+        elseif r == "updated" then updated = updated + 1
+        elseif r == "full" then full = true end
     end
 
     if created > 0 then Print(created .. " macro(s) créée(s) (onglet macros du personnage).") end
@@ -279,11 +298,132 @@ rebuild:SetScript("OnClick", function() SetupMacros(true) end)
 
 local rebuildNote = panel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 rebuildNote:SetPoint("LEFT", rebuild, "RIGHT", 10, 0)
-rebuildNote:SetText(T("Réécrit les 7 macros, même si vous les avez modifiées.",
-                      "Rewrites all 7 macros, even if you edited them."))
+
+-- Aperçu des macros : liste à gauche, contenu de la macro choisie à droite.
+local pvTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+pvTitle:SetPoint("TOPLEFT", rebuild, "BOTTOMLEFT", -4, -24)
+pvTitle:SetText(T("Aperçu des macros", "Macro preview"))
+
+local box = CreateFrame("Frame", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
+box:SetPoint("TOPLEFT", pvTitle, "BOTTOMLEFT", 0, -8)
+box:SetSize(610, 250)
+if box.SetBackdrop then
+    box:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    box:SetBackdropColor(0, 0, 0, 0.6)
+    box:SetBackdropBorderColor(0.55, 0.45, 0.25)
+end
+
+local LIST_W, ITEM_H = 190, 27
+local divider = box:CreateTexture(nil, "ARTWORK")
+divider:SetColorTexture(0.55, 0.45, 0.25, 0.6)
+divider:SetWidth(1)
+divider:SetPoint("TOPLEFT", LIST_W + 10, -8)
+divider:SetPoint("BOTTOMLEFT", LIST_W + 10, 8)
+
+local STATES = {
+    missing = { T("Absente", "Missing"), 1, 0.35, 0.35 },
+    ok      = { T("À jour", "Up to date"), 0.3, 1, 0.3 },
+    edited  = { T("Modifiée par vous", "Edited by you"), 1, 0.65, 0.2 },
+}
+
+local function MacroIcon(m)
+    if m.iconPath then return m.iconPath end
+    local f = (C_Spell and C_Spell.GetSpellTexture) or GetSpellTexture
+    return (f and m.spell and f(m.spell)) or "Interface\\Icons\\INV_Misc_QuestionMark"
+end
+
+local macroList, items, selectedMacro = nil, {}, 1
+local RefreshPreview
+
+local dIcon = box:CreateTexture(nil, "ARTWORK")
+dIcon:SetSize(36, 36)
+dIcon:SetPoint("TOPLEFT", LIST_W + 22, -12)
+local dName = box:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+dName:SetPoint("TOPLEFT", dIcon, "TOPRIGHT", 8, -2)
+local dState = box:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+dState:SetPoint("TOPLEFT", dName, "BOTTOMLEFT", 0, -4)
+local dBody = box:CreateFontString(nil, "ARTWORK", "ChatFontNormal")
+dBody:SetPoint("TOPLEFT", dIcon, "BOTTOMLEFT", 0, -12)
+dBody:SetWidth(610 - LIST_W - 44)
+dBody:SetJustifyH("LEFT")
+dBody:SetJustifyV("TOP")
+dBody:SetSpacing(2)
+local dWrite = CreateFrame("Button", nil, box, "UIPanelButtonTemplate")
+dWrite:SetSize(200, 22)
+dWrite:SetPoint("BOTTOMRIGHT", -12, 12)
+dWrite:SetScript("OnClick", function()
+    local m = macroList and macroList[selectedMacro]
+    if not m then return end
+    if InCombatLockdown() then Print(T("impossible en combat.", "not in combat.")) return end
+    local r = WriteMacro(m, true)
+    if r == "full" then Print(T("plus de place dans les macros du personnage.", "no room left in character macros."))
+    elseif r then Print(MacroName(m.name) .. T(" : macro écrite.", ": macro written.")) end
+    RefreshPreview()
+end)
+
+local function Item(i)
+    if items[i] then return items[i] end
+    local b = CreateFrame("Button", nil, box)
+    b:SetSize(LIST_W, ITEM_H - 2)
+    b:SetPoint("TOPLEFT", 8, -8 - (i - 1) * ITEM_H)
+    b.sel = b:CreateTexture(nil, "BACKGROUND")
+    b.sel:SetAllPoints()
+    b.sel:SetColorTexture(1, 0.82, 0, 0.15)
+    b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetSize(20, 20)
+    b.icon:SetPoint("LEFT", 3, 0)
+    b.name = b:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    b.name:SetPoint("LEFT", b.icon, "RIGHT", 6, 0)
+    b.name:SetPoint("RIGHT", -16, 0)
+    b.name:SetJustifyH("LEFT")
+    b.name:SetWordWrap(false)
+    b.dot = b:CreateTexture(nil, "ARTWORK")
+    b.dot:SetSize(8, 8)
+    b.dot:SetPoint("RIGHT", -4, 0)
+    b:SetScript("OnClick", function(self) selectedMacro = self.index; RefreshPreview() end)
+    items[i] = b
+    return b
+end
+
+RefreshPreview = function()
+    macroList = BuildMacros()
+    if not macroList then
+        dName:SetText(T("Chargement des sorts…", "Loading spells…"))
+        return
+    end
+    rebuildNote:SetText((T("Réécrit les %d macros, même si vous les avez modifiées.",
+        "Rewrites all %d macros, even if you edited them.")):format(#macroList))
+    if selectedMacro > #macroList then selectedMacro = 1 end
+    for i, m in ipairs(macroList) do
+        local b, st = Item(i), STATES[MacroState(m)]
+        b.index = i
+        b.icon:SetTexture(MacroIcon(m))
+        b.name:SetText(MacroName(m.name))
+        b.dot:SetColorTexture(st[2], st[3], st[4])
+        b.sel:SetShown(i == selectedMacro)
+        b:Show()
+    end
+    for i = #macroList + 1, #items do items[i]:Hide() end
+    local m = macroList[selectedMacro]
+    local state = MacroState(m)
+    local st = STATES[state]
+    dIcon:SetTexture(MacroIcon(m))
+    dName:SetText(MacroName(m.name))
+    dState:SetText(st[1])
+    dState:SetTextColor(st[2], st[3], st[4])
+    dBody:SetText(m.body)
+    dWrite:SetText(state == "missing" and T("Créer cette macro", "Create this macro")
+        or T("Réécrire cette macro", "Rewrite this macro"))
+end
+
+rebuild:SetScript("OnClick", function() SetupMacros(true); RefreshPreview() end)
 
 panel:SetScript("OnShow", function()
     for _, cb in ipairs(checkboxes) do cb:Refresh() end
+    RefreshPreview()
 end)
 
 local settingsCategory
