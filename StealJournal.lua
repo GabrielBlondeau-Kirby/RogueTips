@@ -5,6 +5,9 @@
 -- Données et fonctions partagées : ns.steal (StealHistory.lua).
 
 local ADDON, ns = ...
+ns.modules = ns.modules or {}  -- exécutés par Init.lua, une fois la langue choisie connue
+ns.onLoad = ns.onLoad or {}
+ns.modules[#ns.modules + 1] = function()
 local S = ns.steal
 if not S then return end  -- pas voleur : StealHistory.lua ne s'est pas chargé
 local L = ns.L
@@ -378,4 +381,5 @@ S.ToggleJournal = function() frame:SetShown(not frame:IsShown()) end
 S.OnSteal = function()
     S.Refresh()
     if frame:IsShown() then Refresh() end
+end
 end

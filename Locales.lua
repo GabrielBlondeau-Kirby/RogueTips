@@ -392,4 +392,8 @@ local locales = {
 }
 locales.esMX = locales.esES
 
-ns.L = setmetatable(locales[GetLocale()] or {}, { __index = enUS })
+-- Appelée par Init.lua avec la langue choisie dans les options (ou celle du jeu).
+function ns.SetLocale(code)
+    ns.L = setmetatable(locales[code] or {}, { __index = enUS })
+end
+ns.SetLocale(GetLocale())
