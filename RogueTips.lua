@@ -294,6 +294,15 @@ local cbDebug = CheckBox(cbMacros,
     function(v) debug = v end)
 cbDebug:SetPoint("TOPLEFT", cbMacros, "BOTTOMLEFT", 0, -22)
 
+local SetMinimapShown  -- défini avec l'icône de la minimap, plus bas
+local cbMinimap = CheckBox(cbDebug,
+    T("Icône autour de la minimap", "Minimap icon"),
+    T("Clic : réglages. Glisser : la déplacer.", "Click: settings. Drag: move it."),
+    function() return not db.minimap.hide end,
+    function(v) SetMinimapShown(v) end)
+cbMinimap:ClearAllPoints()
+cbMinimap:SetPoint("LEFT", cbDebug, "LEFT", 330, 0)
+
 local rebuild = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 rebuild:SetSize(200, 24)
 rebuild:SetPoint("TOPLEFT", cbDebug, "BOTTOMLEFT", 4, -32)
@@ -476,6 +485,68 @@ end
 
 local function OpenPanel() ns.Options.Toggle(panel) end
 
+-- Icône autour de la minimap. Clic : réglages. Glisser : tourner autour.
+local mm = CreateFrame("Button", "RogueTipsMinimapButton", Minimap)
+mm:SetSize(31, 31)
+mm:SetFrameStrata("MEDIUM")
+mm:SetFrameLevel(8)
+mm:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+mm:RegisterForDrag("LeftButton")
+mm:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+mm:Hide()
+
+local mmBg = mm:CreateTexture(nil, "BACKGROUND")
+mmBg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+mmBg:SetSize(20, 20)
+mmBg:SetPoint("TOPLEFT", 7, -5)
+
+local mmIcon = mm:CreateTexture(nil, "ARTWORK")
+mmIcon:SetSize(17, 17)
+mmIcon:SetPoint("TOPLEFT", 7, -6)
+if SetPortraitToTexture then SetPortraitToTexture(mmIcon, "Interface\\Icons\\Ability_Stealth")
+else mmIcon:SetTexture("Interface\\Icons\\Ability_Stealth") end
+
+local mmBorder = mm:CreateTexture(nil, "OVERLAY")
+mmBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+mmBorder:SetSize(53, 53)
+mmBorder:SetPoint("TOPLEFT")
+
+local function PlaceMinimapButton()
+    local a = math.rad(db.minimap.angle)
+    local r = Minimap:GetWidth() / 2 + 5
+    mm:ClearAllPoints()
+    mm:SetPoint("CENTER", Minimap, "CENTER", math.cos(a) * r, math.sin(a) * r)
+end
+
+SetMinimapShown = function(shown)
+    db.minimap.hide = not shown
+    mm:SetShown(shown)
+end
+
+mm:SetScript("OnClick", function(_, button)
+    if button == "RightButton" and ns.steal and ns.steal.ToggleJournal then ns.steal.ToggleJournal()
+    else OpenPanel() end
+end)
+mm:SetScript("OnDragStart", function(self)
+    self:SetScript("OnUpdate", function()
+        local mx, my = Minimap:GetCenter()
+        local px, py = GetCursorPosition()
+        local scale = Minimap:GetEffectiveScale()
+        db.minimap.angle = math.deg(math.atan2(py / scale - my, px / scale - mx))
+        PlaceMinimapButton()
+    end)
+end)
+mm:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+mm:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:SetText("RogueTips", 0.2, 1, 0.6)
+    GameTooltip:AddLine(T("Clic gauche : réglages", "Left-click: settings"), 1, 1, 1)
+    GameTooltip:AddLine(T("Clic droit : journal du voleur", "Right-click: thief's journal"), 1, 1, 1)
+    GameTooltip:AddLine(T("Glisser : déplacer autour de la minimap", "Drag: move around the minimap"), 0.6, 0.6, 0.6)
+    GameTooltip:Show()
+end)
+mm:SetScript("OnLeave", GameTooltip_Hide)
+
 ---------------------------------------------------------------------------
 -- Événements et commande
 ---------------------------------------------------------------------------
@@ -496,6 +567,9 @@ ev:SetScript("OnEvent", function(_, event, arg1)
             if RogueTipsDB[k] == nil then RogueTipsDB[k] = v end
         end
         db = RogueTipsDB
+        db.minimap = db.minimap or { angle = 160, hide = false }
+        PlaceMinimapButton()
+        mm:SetShown(not db.minimap.hide)
         RegisterPanel()
         return
     end
