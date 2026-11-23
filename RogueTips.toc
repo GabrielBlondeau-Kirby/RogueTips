@@ -10,6 +10,7 @@
 
 RogueTips.lua
 Locales.lua
+Options.lua
 StealHistory.lua
 StealJournal.lua
 DamageText.lua

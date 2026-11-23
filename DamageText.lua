@@ -1,7 +1,7 @@
 -- DamageText (module de RogueTips) : chiffres de dégâts au-dessus de la cible,
 -- stylés selon la nature des dégâts (UNIT_COMBAT). Le montant est une valeur
 -- secrète : on ne peut que le faire afficher par une FontString, pas le lire.
--- Réglages : Échap → Options → AddOns → RogueTips → Chiffres de dégâts.
+-- Réglages : /roguetips (ou /rtdmg options) → onglet Chiffres de dégâts.
 -- /rtdmg : active / coupe ; /rtdmg options : ouvre les réglages.
 
 local ADDON, ns = ...
@@ -510,25 +510,13 @@ local function BuildPanel()
     end)
 end
 
-local settingsCategory
+-- Page de la fenêtre de réglages (Options.lua).
 local function RegisterPanel()
     BuildPanel()
-    if ns.category and Settings and Settings.RegisterCanvasLayoutSubcategory then
-        settingsCategory = Settings.RegisterCanvasLayoutSubcategory(ns.category, panel, panel.name)
-    elseif InterfaceOptions_AddCategory then
-        panel.parent = "RogueTips"
-        InterfaceOptions_AddCategory(panel)
-    end
+    ns.Options.AddPage(panel, panel.name, "Interface\\Icons\\Ability_Rogue_Eviscerate", 3)
 end
 
-local function OpenPanel()
-    if settingsCategory and Settings and Settings.OpenToCategory then
-        Settings.OpenToCategory(settingsCategory:GetID())
-    elseif InterfaceOptionsFrame_OpenToCategory then
-        InterfaceOptionsFrame_OpenToCategory(panel)
-        InterfaceOptionsFrame_OpenToCategory(panel)
-    end
-end
+local function OpenPanel() ns.Options.Toggle(panel) end
 
 -- Démarrage --------------------------------------------------------------------
 

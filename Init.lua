@@ -1,5 +1,5 @@
 -- Démarrage de RogueTips : les modules attendent les SavedVariables pour
--- connaître la langue choisie (Options → RogueTips → Langue), puis se construisent.
+-- connaître la langue choisie (/roguetips → Général → Langue), puis se construisent.
 
 local ADDON, ns = ...
 
