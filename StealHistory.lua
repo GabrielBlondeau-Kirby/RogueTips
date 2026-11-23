@@ -827,7 +827,7 @@ local function Toggle()
 end
 
 ---------------------------------------------------------------------------
--- 4. Panneau d'options (Options > Add-ons), dans un cadre qui défile
+-- 4. Panneau d'options (page de la fenêtre de réglages, Options.lua), dans un cadre qui défile
 ---------------------------------------------------------------------------
 
 local SetProfile, DeleteProfile, ProfileNames, ApplyAll  -- définis avec les profils, plus bas
@@ -1117,26 +1117,12 @@ panel:SetScript("OnHide", function()
     if not shownBeforePreview then frame:Hide() end
 end)
 
--- Sous-catégorie de RogueTips (Options > AddOns > RogueTips > StealHistory).
--- RogueTips.lua est chargé avant et range sa catégorie dans ns.category.
-local settingsCategory
+-- Page de la fenêtre de réglages de RogueTips (Options.lua).
 local function RegisterPanel()
-    if ns.category and Settings and Settings.RegisterCanvasLayoutSubcategory then
-        settingsCategory = Settings.RegisterCanvasLayoutSubcategory(ns.category, panel, panel.name)
-    elseif InterfaceOptions_AddCategory then
-        panel.parent = "RogueTips"
-        InterfaceOptions_AddCategory(panel)
-    end
+    ns.Options.AddPage(panel, L.TITLE, "Interface\\Icons\\INV_Misc_Bag_11", 2)
 end
 
-local function OpenPanel()
-    if settingsCategory then
-        Settings.OpenToCategory(settingsCategory:GetID())
-    elseif InterfaceOptionsFrame_OpenToCategory then
-        InterfaceOptionsFrame_OpenToCategory(panel)
-        InterfaceOptionsFrame_OpenToCategory(panel) -- 2e appel : bug connu du 1er affichage
-    end
-end
+local function OpenPanel() ns.Options.Toggle(panel) end
 
 ---------------------------------------------------------------------------
 -- 5. Icône autour de la minimap

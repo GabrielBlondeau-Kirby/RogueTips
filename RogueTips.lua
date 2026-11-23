@@ -239,7 +239,7 @@ end
 hooksecurefunc(GameTooltip, "SetBagItem", OnSetBagItem)
 
 ---------------------------------------------------------------------------
--- 3. Panneau d'options (Options > Add-ons)
+-- 3. Panneau d'options (page « Général » de la fenêtre de réglages, Options.lua)
 ---------------------------------------------------------------------------
 
 
@@ -469,25 +469,12 @@ panel:SetScript("OnShow", function()
     RefreshPreview()
 end)
 
-local settingsCategory
+-- Première page de la fenêtre de réglages (Options.lua).
 local function RegisterPanel()
-    if Settings and Settings.RegisterCanvasLayoutCategory then
-        settingsCategory = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
-        Settings.RegisterAddOnCategory(settingsCategory)
-        ns.category = settingsCategory  -- parent du panneau de StealHistory.lua
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(panel)
-    end
+    ns.Options.AddPage(panel, T("Général", "General"), "Interface\\Icons\\Ability_Stealth", 1)
 end
 
-local function OpenPanel()
-    if settingsCategory then
-        Settings.OpenToCategory(settingsCategory:GetID())
-    elseif InterfaceOptionsFrame_OpenToCategory then
-        InterfaceOptionsFrame_OpenToCategory(panel)
-        InterfaceOptionsFrame_OpenToCategory(panel) -- 2e appel : bug connu du 1er affichage
-    end
-end
+local function OpenPanel() ns.Options.Toggle(panel) end
 
 ---------------------------------------------------------------------------
 -- Événements et commande
