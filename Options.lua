@@ -10,7 +10,7 @@ ns.modules[#ns.modules + 1] = function()
 local FR = (ns.lang or GetLocale()) == "frFR"
 local function T(fr, en) return FR and fr or en end
 
-local WIDTH, HEIGHT = 760, 620
+local WIDTH, HEIGHT = 760, 700
 local Options = { pages = {} }
 ns.Options = Options
 
